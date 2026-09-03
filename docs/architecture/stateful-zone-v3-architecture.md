@@ -111,6 +111,13 @@ ShardMap[shard_id] = owner_zone_id + owner_epoch + state
 - 普通命令不访问 Coordinator；
 - 旧路由收到 `NOT_OWNER` 后刷新缓存，并复用相同 `request_id` 重试。
 
+当前本地原型用共享 Go SDK 在 Gate 和每个 Zone 启动时同步拉取完整
+ShardMap，之后通过 Coordinator 的 loopback HTTP 长轮询订阅
+`map_version` 变化，并原子替换本地不可变快照。初始快照失败时服务不 Ready；
+订阅中断期间现有条目仍受租约过期约束；`NOT_OWNER` 触发同步全量重取后再复用
+原 `request_id`。这验证了缓存分发语义，不把 HTTP 长轮询规定为生产集群的
+最终控制面传输。
+
 ### 5.1 位置建议与授权分离
 
 Placement Planner 可以使用 Rendezvous Hashing、CPU、Actor 内存、邮箱积压、故障域和迁移并发计算候选 Zone。候选位置不授予写权限；只有生产 Coordinator 的 2/3 多数派提交后，Owner 和 `owner_epoch` 才成为权威。
@@ -268,6 +275,12 @@ Dirty Actor 必须先刷盘成功；失败则继续驻留并重试。
 
 修改目标农田的投虫、捉虫和清理命令直接路由到农场主 Actor。若一个玩法同时修改两名玩家资产，则不能假装存在跨 Actor 本地事务，必须使用预留、Outbox 加补偿或邮件兜底。
 
+当前已实现的好友投虫/捉虫是免费动作：Visitor Zone 先校验访问租约和双向好友，
+再通过带路由授权头的 loopback HTTP/Protobuf 调用 Owner Zone，最终只在 Owner
+Actor Mailbox 内修改地块、幂等回执和 Dirty 检查点。Visitor 不扣库存、不获奖励，
+因此这里没有跨 Actor 事务，也不需要 Saga。一次 Owner Actor 事件同时扇出私有
+`PLAYER_STATE_CHANGED` 和各有效访问者的公开 `FRIEND_FARM_CHANGED` 投影。
+
 ## 11. 实时同步
 
 - WebSocket 建立在 Client 与 GateSvr 之间；
@@ -277,6 +290,13 @@ Dirty Actor 必须先刷盘成功；失败则继续驻留并重试。
 - 版本缺口触发补发或完整重同步；
 - Owner epoch 变化强制完整快照；
 - MySQL 不是在线实时事实。
+
+好友访问扩展对一次地块变化在 Actor Mailbox 内同时生成私有 `PlotView` 和公开
+`PublicPlotView`：Zone 通过同一有界异步队列把私有投影推给在线 Owner，把公开
+投影推给当前访问租约对应的 Visitor。两者携带相同 Owner
+`(owner_epoch, player_seq)`，但不要求公开变更的 `player_seq` 连续，因为
+Owner 的私有资产变化也会推进序号。当前原型只配置一个 loopback Gate Push
+端点；多 Gate 连接位置注册、跨 Gate 重试和持久化 Push 不在本次实现证据内。
 
 ## 12. 规划值与验证边界
 

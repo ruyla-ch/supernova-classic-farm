@@ -5,6 +5,7 @@
   "type": "module",
   "scripts": {
     "dev": "vite --host 0.0.0.0 --port 5173",
+    "test": "tsx --test src/lib/friend-farm.test.ts",
     "build": "vue-tsc --noEmit && vite build",
     "preview": "vite preview --host 0.0.0.0 --port 5173",
     "typecheck": "vue-tsc --noEmit"

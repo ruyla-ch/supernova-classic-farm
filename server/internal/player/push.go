@@ -55,6 +55,26 @@ type PushForwarder interface {
 	Forward(context.Context, *wsv1.WsEnvelope) error
 }
 
+// FarmChangeEvent contains immutable private-owner and public-visitor plot
+// projections captured inside the owner Actor mailbox. Async consumers must
+// never read Actor state.
+type FarmChangeEvent struct {
+	OwnerPlayerID     uint64
+	OwnerEpoch        uint64
+	OwnerPlayerSeq    uint64
+	ServerTimeMS      int64
+	Reason            reasonv1.StateChangeReason
+	CausedByRequestID string
+	OwnerPlotUpserts  []*wsv1.PlotView
+	PublicPlotUpserts []*wsv1.PublicPlotView
+}
+
+// FarmChangeForwarder must return immediately; the local implementation only
+// attempts a non-blocking enqueue into a bounded dispatcher.
+type FarmChangeForwarder interface {
+	ForwardFarmChange(FarmChangeEvent)
+}
+
 type HTTPPushForwarder struct {
 	client   *http.Client
 	endpoint string

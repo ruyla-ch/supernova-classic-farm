@@ -3,6 +3,7 @@ package player
 import (
 	"context"
 	"errors"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -10,11 +11,23 @@ import (
 	datav1 "github.com/Wriosley/supernova-classic-farm/server/gen/classicfarm/v1/data"
 	wsv1 "github.com/Wriosley/supernova-classic-farm/server/gen/classicfarm/v1/ws"
 	plotv1 "github.com/Wriosley/supernova-classic-farm/server/gen/classicfarm/v1/ws/plot"
+	reasonv1 "github.com/Wriosley/supernova-classic-farm/server/gen/classicfarm/v1/ws/reason"
 	"github.com/Wriosley/supernova-classic-farm/server/internal/routing"
 	"google.golang.org/protobuf/proto"
 )
 
 type checkpointLoaderFunc func(context.Context, uint64) (*State, error)
+
+type recordingFarmChangeForwarder struct {
+	mu     sync.Mutex
+	events []FarmChangeEvent
+}
+
+func (f *recordingFarmChangeForwarder) ForwardFarmChange(event FarmChangeEvent) {
+	f.mu.Lock()
+	f.events = append(f.events, event)
+	f.mu.Unlock()
+}
 
 func (f checkpointLoaderFunc) Load(ctx context.Context, playerID uint64) (*State, error) {
 	return f(ctx, playerID)
@@ -153,6 +166,55 @@ func fertilizerRequest(playerID uint64, requestID string, plotID, itemID uint32)
 				PlotId: plotID, FertilizerItemId: itemID,
 			},
 		},
+	}
+}
+
+func TestSuccessfulPlotMutationForwardsPublicChangeExactlyOnce(t *testing.T) {
+	runtime := NewRuntime()
+	defer runtime.Close()
+	now := time.UnixMilli(1_800_000_000_000)
+	runtime.now = func() time.Time { return now }
+	recorder := &recordingFarmChangeForwarder{}
+	if err := runtime.SetFarmChangeForwarder(recorder); err != nil {
+		t.Fatal(err)
+	}
+	const playerID uint64 = 42
+	if _, err := runtime.Handle(
+		context.Background(), playerID, LocalOwnerEpoch,
+		buySeedsRequest(playerID, "00112233-4455-6677-8899-aabbccddee01", 1),
+	); err != nil {
+		t.Fatal(err)
+	}
+	request := plantRequest(
+		playerID, "00112233-4455-6677-8899-aabbccddee02", 1, developmentSeedItemID,
+	)
+	if _, err := runtime.Handle(context.Background(), playerID, LocalOwnerEpoch, request); err != nil {
+		t.Fatal(err)
+	}
+	if replay, err := runtime.Handle(
+		context.Background(), playerID, LocalOwnerEpoch, request,
+	); err != nil || !replay.Replayed {
+		t.Fatalf("replay=%+v err=%v", replay, err)
+	}
+
+	recorder.mu.Lock()
+	defer recorder.mu.Unlock()
+	if len(recorder.events) != 1 {
+		t.Fatalf("farm change count=%d, want 1", len(recorder.events))
+	}
+	event := recorder.events[0]
+	if event.OwnerPlayerID != playerID ||
+		event.OwnerEpoch != LocalOwnerEpoch ||
+		event.OwnerPlayerSeq != 2 ||
+		event.Reason != reasonv1.StateChangeReason_PLANT ||
+		event.CausedByRequestID != request.RequestId ||
+		len(event.OwnerPlotUpserts) != 1 ||
+		event.OwnerPlotUpserts[0].GetPlotId() != 1 ||
+		event.OwnerPlotUpserts[0].GetPlotState() != plotv1.PlotState_GROWING ||
+		len(event.PublicPlotUpserts) != 1 ||
+		event.PublicPlotUpserts[0].GetPlotId() != 1 ||
+		event.PublicPlotUpserts[0].GetPlotState() != plotv1.PlotState_GROWING {
+		t.Fatalf("farm change=%+v", event)
 	}
 }
 
@@ -502,6 +564,26 @@ func TestGetShopUsesAtomicallyReplacedConfigSnapshot(t *testing.T) {
 	}
 }
 
+func TestGetShopReturnsDevelopmentCropCatalog(t *testing.T) {
+	runtime := NewRuntime()
+	defer runtime.Close()
+
+	response, err := runtime.Handle(context.Background(), 42, LocalOwnerEpoch,
+		getShopRequest(42, "development-shop"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	shop := response.GetGetShopResponse()
+	if response.GetError() != nil || len(shop.GetCrops()) != 11 {
+		t.Fatalf("unexpected development GET_SHOP response: %+v", response)
+	}
+	for index, crop := range shop.GetCrops() {
+		if crop.GetCropId() != uint32(2001+index) {
+			t.Fatalf("crop catalog order at %d = %+v", index, crop)
+		}
+	}
+}
+
 func TestBuySeedsUsesPinnedReplacementConfig(t *testing.T) {
 	runtime := NewRuntime()
 	defer runtime.Close()
@@ -580,7 +662,10 @@ func TestPlantIsIdempotentAndBatchesWithBuyInOneCheckpoint(t *testing.T) {
 		len(checkpoint.Plots) != int(InitialPlotCount) ||
 		checkpoint.Plots[0].State != datav1.PlotRecordState_GROWING ||
 		checkpoint.Plots[0].CropId != 2001 ||
-		checkpoint.Plots[0].BaseGrowthRate.GetScaledValue() != 1_000_000 {
+		checkpoint.Plots[0].BaseGrowthRate.GetScaledValue() != 1_000_000 ||
+		checkpoint.Plots[0].StealQuantity != 1 ||
+		checkpoint.Plots[0].ProtectedOwnerYield != 2 ||
+		checkpoint.Plots[0].MaxStealTimes != 1 {
 		t.Fatalf("unexpected PLANT checkpoint: %+v", checkpoint)
 	}
 	for _, untouched := range checkpoint.Plots[1:] {

@@ -121,6 +121,9 @@ func (s *connectionSubscription) finishSnapshot(
 	defer s.mu.Unlock()
 	sort.SliceStable(s.buffer, func(i, j int) bool {
 		left, right := s.buffer[i].envelope.StateVersion, s.buffer[j].envelope.StateVersion
+		if left == nil || right == nil {
+			return left != nil
+		}
 		if left.OwnerEpoch != right.OwnerEpoch {
 			return left.OwnerEpoch < right.OwnerEpoch
 		}
@@ -128,6 +131,10 @@ func (s *connectionSubscription) finishSnapshot(
 	})
 	bodies := [][]byte{responseBody}
 	for _, push := range s.buffer {
+		if push.envelope.Action == wsv1.Action_FRIEND_FARM_CHANGED {
+			bodies = append(bodies, push.body)
+			continue
+		}
 		if !stateVersionAfter(push.envelope.StateVersion, snapshotVersion) {
 			continue
 		}
@@ -180,20 +187,44 @@ func validatePushEnvelope(envelope *wsv1.WsEnvelope) error {
 	if envelope == nil ||
 		envelope.ProtocolVersion != ProtocolVersion ||
 		envelope.MessageKind != wsv1.MessageKind_PUSH ||
-		envelope.Action != wsv1.Action_PLAYER_STATE_CHANGED ||
 		envelope.RequestId != "" ||
 		envelope.TargetPlayerId == 0 ||
-		envelope.StateVersion == nil ||
-		envelope.StateVersion.OwnerEpoch == 0 ||
 		envelope.ServerTimeMs <= 0 ||
 		envelope.Error != nil ||
 		envelope.Replayed {
 		return errors.New("invalid push envelope")
 	}
-	push := envelope.GetPlayerStateChangedPush()
-	if push == nil || push.Reason == reasonv1.StateChangeReason_STATE_CHANGE_REASON_UNSPECIFIED ||
-		push.Patch == nil {
-		return errors.New("invalid push payload")
+	switch envelope.Action {
+	case wsv1.Action_PLAYER_STATE_CHANGED:
+		if envelope.StateVersion == nil || envelope.StateVersion.OwnerEpoch == 0 {
+			return errors.New("invalid player state push version")
+		}
+		push := envelope.GetPlayerStateChangedPush()
+		if push == nil ||
+			push.Reason == reasonv1.StateChangeReason_STATE_CHANGE_REASON_UNSPECIFIED ||
+			push.Patch == nil {
+			return errors.New("invalid player state push payload")
+		}
+	case wsv1.Action_FRIEND_FARM_CHANGED:
+		if envelope.StateVersion != nil {
+			return errors.New("friend farm push must not use envelope state version")
+		}
+		push := envelope.GetFriendFarmChangedPush()
+		if push == nil || push.OwnerPlayerId == 0 ||
+			push.OwnerPlayerId == envelope.TargetPlayerId ||
+			len(push.VisitId) != 16 ||
+			push.OwnerStateVersion == nil ||
+			push.OwnerStateVersion.OwnerEpoch == 0 ||
+			len(push.PlotUpserts) == 0 {
+			return errors.New("invalid friend farm push payload")
+		}
+		for _, plot := range push.PlotUpserts {
+			if plot == nil || plot.PlotId == 0 {
+				return errors.New("invalid friend farm plot upsert")
+			}
+		}
+	default:
+		return errors.New("unsupported push action")
 	}
 	return nil
 }

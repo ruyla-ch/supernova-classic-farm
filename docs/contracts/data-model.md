@@ -34,6 +34,29 @@ It does not define SQL DDL, generated Protobuf, RPC code, migrations, or the rew
 
 V3 is authoritative. MySQL is the latest recovery checkpoint, not the online truth for an active Actor. There is no synchronous Journal, Kafka replay, database-per-command transaction path, local WAL, or claim that an acknowledged but unflushed ordinary write survives an abnormal Zone loss.
 
+### 1.1 Proposed friend relation extension
+
+The `feat/mysql-friend-visit-steal` Slice-1 proposal adds relational friend
+authority outside the Player checkpoint:
+
+- `friend_codes` has primary key `player_id`, unique binary-collated `code`,
+  `created_at_ms`, and `expires_at_ms`. Updating a player's code invalidates
+  the previous code.
+- `friend_relations` has primary key `(player_low_id, player_high_id)`, where
+  both IDs are non-zero and `player_low_id < player_high_id`. It stores one
+  unordered mutual relationship with `status=ACTIVE`, `created_at_ms`, and
+  `updated_at_ms`.
+- Both IDs reference `accounts.player_id`. A relationship becomes observable
+  only after its single row commits; there is no half-relationship.
+- A serializable redeem transaction locks the code owner and both players'
+  active relation ranges before enforcing the 100-friend limit and inserting
+  the pair.
+- Friend relations are not copied into `PlayerCheckpointV1`. Later visit IDs
+  are process-local and are not MySQL recovery state.
+
+This additive proposal does not alter the accepted Player Actor aggregate or
+its Dirty writeback semantics.
+
 ## 2. Representation choice and model boundaries
 
 The first implementation MUST use:
@@ -202,13 +225,40 @@ The blob MUST decode to no more than 4 MiB in V1. Exceeding the limit is an inva
 | `base_growth_rate` | `RateDecimal6` | Non-EMPTY, `> 0`, frozen |
 | `base_yield` | `uint32` | Non-EMPTY, `> 0`, frozen |
 | `stolen_quantity` | `uint32` | Non-EMPTY; `<= base_yield` |
+| `steal_quantity` | `uint32` | Frozen at PLANT; zero marks a legacy non-stealable round |
+| `max_steal_times` | `uint32` | Frozen at PLANT; bounds history length |
+| `protected_owner_yield` | `uint32` | Frozen Owner minimum remaining yield |
+| `steal_count` | `uint32` | Equals the number of recorded successful visitors |
+| `stolen_visitor_player_ids` | repeated `uint64` | Unique, non-zero and bounded by `max_steal_times` |
 | `settled_growth_value` | `GrowthDecimal9` | GROWING/MATURE; within bounds |
 | `last_settled_at_ms` | `int64` | GROWING/MATURE |
 | `estimated_mature_at_ms` | optional `int64` | GROWING cache; rebuildable |
 | `fertilizer_effect` | optional `TimedEffectRecord` | GROWING only |
 | `pest_effect` | optional `TimedEffectRecord` | GROWING only |
 
+On `feat/mysql-friend-visit-steal`, a newly planted round freezes all three
+steal configuration fields. A successful Owner mutation atomically increments
+`steal_count` and `stolen_quantity` and appends one Visitor ID. The resulting
+yield must satisfy:
+
+```text
+stolen_quantity + protected_owner_yield <= base_yield
+```
+
+Legacy rounds with zero steal configuration remain readable but cannot be
+stolen. CLEAN clears every steal field. These values remain inside the Player
+checkpoint blob and do not add relational SQL columns.
+
 `TimedEffectRecord` contains `effect_instance_id UUID`, `effect_kind`, `effect_item_or_pest_id uint32`, optional `source_player_id uint64`, `config_version uint64`, `modifier RateDecimal6`, `start_at_ms int64`, and `end_at_ms int64`.
+
+The implemented friend-pest path persists `effect_kind=PEST`,
+`effect_item_or_pest_id=1`, and the non-zero applying Visitor as
+`source_player_id`, together with the frozen configuration version, modifier,
+and interval. Apply/catch, their retained Owner-Actor result, `player_seq`, and
+`checkpoint_revision` are copied in the same Player checkpoint. Recovery
+therefore restores either the complete active effect plus its source and
+receipt, or the later complete caught state plus its receipt; it does not
+reconstruct pest timing from current configuration.
 
 State invariants:
 

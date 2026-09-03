@@ -23,7 +23,7 @@ send request -> await correlated response -> record latency -> repeat
    ```powershell
    . .\tests\e2e\_mysql-env.ps1
    $c = Resolve-MySQLConnection -AllowPrompt
-   .\start-servers.ps1 -MySQLDSN $c.Dsn -DualZone
+   .\start-servers.ps1 -MySQLDSN $c.Dsn
    ```
 
 2. 在另一终端运行：

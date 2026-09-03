@@ -276,6 +276,39 @@
       "postRunWarning": "This database must not be reused for epoch-one bootstrap tests."
     },
     {
+      "id": "e2e-mysql-friend-slice",
+      "name": "MySQL dual-Zone friend slice",
+      "type": "e2e-ps1",
+      "purpose": "Dual-Zone MySQL friend create, redeem, list, visit and direct steal path",
+      "tiers": ["service", "mysql"],
+      "preconditions": [
+        "Local MySQL from repo-root .env",
+        "Ports 8080-8085 free",
+        "Migrations through 000006 applied"
+      ],
+      "estimatedDurationSec": 180,
+      "impact": "Writes two E2E accounts, friend relations and Player checkpoints to the configured database",
+      "files": [
+        "tests/e2e/run-mysql-friend-slice.ps1",
+        "tests/e2e/run-dual-zone-routing.ps1",
+        "tests/e2e/_mysql-env.ps1",
+        "server/test/e2e/mysql_friend_slice_test.go"
+      ],
+      "command": {
+        "kind": "powershell",
+        "workdir": ".",
+        "script": "tests/e2e/run-mysql-friend-slice.ps1",
+        "args": []
+      },
+      "ports": [8080, 8081, 8082, 8083, 8084, 8085],
+      "needsMysql": true,
+      "clearMysqlDsn": false,
+      "destructive": false,
+      "repeatable": true,
+      "runnable": true,
+      "postRunWarning": ""
+    },
+    {
       "id": "manual-browser-h5",
       "name": "Browser H5 smoke",
       "type": "manual",

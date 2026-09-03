@@ -7,8 +7,10 @@ import {
   HttpErrorSchema,
   LoginRequestSchema,
   LoginResponseSchema,
+  LogoutRequestSchema,
   RegisterRequestSchema,
   RegisterResponseSchema,
+  SessionResponseSchema,
   WsTicketRequestSchema,
   WsTicketResponseSchema,
   type ClientBootstrapResponse,
@@ -166,6 +168,36 @@ export async function authenticate(
     throw new Error('认证响应缺少 Session')
   }
   return decoded.session
+}
+
+export async function fetchSession(): Promise<SessionView | undefined> {
+  try {
+    const response = await request('/v1/auth/session')
+    const decoded = fromBinary(
+      SessionResponseSchema,
+      new Uint8Array(await response.arrayBuffer()),
+    )
+    return decoded.session
+  } catch (error) {
+    if (
+      error instanceof ProtobufHttpError &&
+      (error.status === 401 || error.status === 403)
+    ) {
+      return undefined
+    }
+    throw error
+  }
+}
+
+export async function logout(csrfToken: string): Promise<void> {
+  await request('/v1/auth/logout', {
+    method: 'POST',
+    headers: {
+      'Content-Type': PROTOBUF_MEDIA_TYPE,
+      'X-CSRF-Token': csrfToken,
+    },
+    body: toBinary(LogoutRequestSchema, create(LogoutRequestSchema, {})),
+  })
 }
 
 export async function fetchBootstrap(): Promise<ClientBootstrapResponse> {

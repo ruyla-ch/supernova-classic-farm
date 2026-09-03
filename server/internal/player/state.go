@@ -15,8 +15,10 @@ const (
 	InitialCoinBalance  int64  = 10
 	BasicFertilizerID   uint32 = 1
 	InitialPlotID       uint32 = 1
-	InitialPlotCount    uint32 = 4
+	InitialPlotCount    uint32 = 16
 	InitialChapterID    uint32 = 1
+	AddFriendTaskID     uint32 = 6
+	StealCropTaskID     uint32 = 7
 	ServerConfigVersion uint64 = 1
 )
 
@@ -37,6 +39,11 @@ type Plot struct {
 	BaseGrowthRateScaled6     int64
 	BaseYield                 uint32
 	StolenQuantity            uint32
+	StealQuantity             uint32
+	MaxStealTimes             uint32
+	ProtectedOwnerYield       uint32
+	StealCount                uint32
+	StolenVisitorPlayerIDs    []uint64
 	SettledGrowthValueScaled9 int64
 	LastSettledAtMS           int64
 	EstimatedMatureAtMS       *int64

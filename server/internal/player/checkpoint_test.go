@@ -38,6 +38,24 @@ func TestInitialCheckpointRoundTrip(t *testing.T) {
 	}
 }
 
+func TestStateFromCheckpointDoesNotBackfillLegacyFourPlots(t *testing.T) {
+	checkpoint := NewInitialCheckpoint(42, time.Now())
+	checkpoint.Plots = checkpoint.Plots[:4]
+
+	state, err := StateFromCheckpoint(checkpoint)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(state.Plots) != 4 {
+		t.Fatalf("legacy checkpoint was backfilled: got %d plots", len(state.Plots))
+	}
+	for plotID := uint32(1); plotID <= 4; plotID++ {
+		if state.Plots[plotID] == nil {
+			t.Fatalf("legacy plot %d is missing", plotID)
+		}
+	}
+}
+
 func TestCheckpointRejectsDigestAndShardMismatch(t *testing.T) {
 	checkpoint := NewInitialCheckpoint(42, time.Now())
 	body, digest, err := MarshalCheckpoint(checkpoint)

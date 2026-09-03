@@ -5,6 +5,7 @@ import (
 
 	datav1 "github.com/Wriosley/supernova-classic-farm/server/gen/classicfarm/v1/data"
 	wsv1 "github.com/Wriosley/supernova-classic-farm/server/gen/classicfarm/v1/ws"
+	zonev1 "github.com/Wriosley/supernova-classic-farm/server/gen/classicfarm/v1/zone"
 	"google.golang.org/protobuf/proto"
 )
 
@@ -29,14 +30,29 @@ func TestGeneratedMessagesRoundTrip(t *testing.T) {
 			CheckpointRevision: 13,
 			CoinBalance:        100,
 			CurrentChapter: &datav1.ChapterStateRecord{
-				ChapterId:           1,
+				ChapterId:            1,
 				ChapterConfigVersion: 2,
-				Status:              datav1.ChapterRecordStatus_IN_PROGRESS,
-				ActivatedAtMs:       1,
+				Status:               datav1.ChapterRecordStatus_IN_PROGRESS,
+				ActivatedAtMs:        1,
 			},
 			LastAppliedConfigVersion: 2,
 			CreatedAtMs:              1,
 			UpdatedAtMs:              2,
+		},
+		&wsv1.CatchPestRequest{PlotId: 1},
+		&wsv1.ApplyPestToFriendRequest{
+			OwnerPlayerId: 2, VisitId: make([]byte, 16), PlotId: 1, PestId: 1,
+		},
+		&wsv1.CatchPestForFriendRequest{
+			OwnerPlayerId: 2, VisitId: make([]byte, 16), PlotId: 1,
+		},
+		&zonev1.ApplyPestRequest{
+			RequestId: "request", OwnerPlayerId: 2, VisitorPlayerId: 1,
+			VisitId: make([]byte, 16), PlotId: 1, PestId: 1,
+		},
+		&zonev1.CatchPestRequest{
+			RequestId: "request", OwnerPlayerId: 2, VisitorPlayerId: 1,
+			VisitId: make([]byte, 16), PlotId: 1,
 		},
 	}
 

@@ -31,9 +31,24 @@ enum Action {
   SELL_CROP = 205;
   CLAIM_CHAPTER_REWARD = 206;
   BUY_FERTILIZER = 207;
-  reserved 208 to 999;
+  CATCH_PEST = 208;
+  reserved 209 to 299;
+  CREATE_FRIEND_CODE = 300;
+  REDEEM_FRIEND_CODE = 301;
+  LIST_FRIENDS = 302;
+  reserved 303 to 309;
+  ENTER_FRIEND_FARM = 310;
+  FARM_HEARTBEAT = 311;
+  EXIT_FRIEND_FARM = 312;
+  reserved 313 to 319;
+  APPLY_PEST_TO_FRIEND = 320;
+  CATCH_PEST_FOR_FRIEND = 321;
+  reserved 322;
+  STEAL_FRIEND_CROP = 323;
+  reserved 324 to 999;
   PLAYER_STATE_CHANGED = 1000;
-  reserved 1001 to 1999;
+  FRIEND_FARM_CHANGED = 1001;
+  reserved 1002 to 1999;
 }
 
 enum ErrorCode {
@@ -66,6 +81,17 @@ enum ErrorCode {
   CHAPTER_NOT_FOUND = 600;
   CHAPTER_NOT_CLAIMABLE = 601;
   CHAPTER_REWARD_ALREADY_CLAIMED = 602;
+  FRIEND_CODE_NOT_FOUND = 700;
+  FRIEND_CODE_EXPIRED = 701;
+  CANNOT_FRIEND_SELF = 702;
+  FRIEND_LIMIT_REACHED = 703;
+  NOT_MUTUAL_FRIEND = 704;
+  VISIT_NOT_FOUND = 705;
+  VISIT_EXPIRED = 706;
+  PEST_ALREADY_ACTIVE = 720;
+  PEST_NOT_ACTIVE = 721;
+  PEST_SOURCE_FORBIDDEN = 722;
+  STEAL_NOT_AVAILABLE = 723;
 }
 
 message WsEnvelope {
@@ -104,8 +130,29 @@ message WsEnvelope {
     PlayerStateChangedPush player_state_changed_push = 32;
     BuyFertilizerRequest buy_fertilizer_request = 33;
     BuyFertilizerResponse buy_fertilizer_response = 34;
+    CreateFriendCodeRequest create_friend_code_request = 35;
+    CreateFriendCodeResponse create_friend_code_response = 36;
+    RedeemFriendCodeRequest redeem_friend_code_request = 37;
+    RedeemFriendCodeResponse redeem_friend_code_response = 38;
+    ListFriendsRequest list_friends_request = 39;
+    ListFriendsResponse list_friends_response = 40;
+    EnterFriendFarmRequest enter_friend_farm_request = 41;
+    EnterFriendFarmResponse enter_friend_farm_response = 42;
+    FarmHeartbeatRequest farm_heartbeat_request = 43;
+    FarmHeartbeatResponse farm_heartbeat_response = 44;
+    ExitFriendFarmRequest exit_friend_farm_request = 45;
+    ExitFriendFarmResponse exit_friend_farm_response = 46;
+    StealFriendCropRequest steal_friend_crop_request = 47;
+    StealFriendCropResponse steal_friend_crop_response = 48;
+    FriendFarmChangedPush friend_farm_changed_push = 49;
+    CatchPestRequest catch_pest_request = 50;
+    CatchPestResponse catch_pest_response = 51;
+    ApplyPestToFriendRequest apply_pest_to_friend_request = 52;
+    ApplyPestToFriendResponse apply_pest_to_friend_response = 53;
+    CatchPestForFriendRequest catch_pest_for_friend_request = 54;
+    CatchPestForFriendResponse catch_pest_for_friend_response = 55;
   }
-  reserved 35 to 99;
+  reserved 56 to 99;
 }
 
 message StateVersion {
@@ -157,6 +204,7 @@ message GetShopRequest {}
 message GetShopResponse {
   uint64 server_config_version = 1;
   repeated ShopEntryView entries = 2;
+  repeated CropCatalogEntryView crops = 3;
 }
 
 message ShopEntryView {
@@ -165,6 +213,20 @@ message ShopEntryView {
   int64 unit_price = 3;
   uint64 price_version = 4;
   bool enabled = 5;
+}
+
+message CropCatalogEntryView {
+  uint32 crop_id = 1;
+  string name = 2;
+  uint32 seed_item_id = 3;
+  uint32 crop_item_id = 4;
+  uint64 maturity_seconds = 5;
+  uint32 base_yield = 6;
+  int64 seed_unit_price = 7;
+  uint64 seed_price_version = 8;
+  uint32 seed_shop_entry_id = 9;
+  int64 sell_unit_price = 10;
+  uint64 sell_price_version = 11;
 }
 
 message GetPlayerSnapshotRequest {}
@@ -298,6 +360,14 @@ message CleanPlotResponse {
   PlayerStatePatch patch = 1;
 }
 
+message CatchPestRequest {
+  uint32 plot_id = 1;
+}
+
+message CatchPestResponse {
+  PlayerStatePatch patch = 1;
+}
+
 message SellCropRequest {
   uint32 crop_item_id = 1;
   uint64 expected_price_version = 2;
@@ -331,4 +401,123 @@ message PlayerStateChangedPush {
   .classicfarm.ws.v1.reason.StateChangeReason reason = 1;
   optional string caused_by_request_id = 2;
   PlayerStatePatch patch = 3;
+}
+
+message FriendFarmChangedPush {
+  uint64 owner_player_id = 1;
+  bytes visit_id = 2;
+  StateVersion owner_state_version = 3;
+  repeated PublicPlotView plot_upserts = 4;
+}
+
+message CreateFriendCodeRequest {}
+
+message CreateFriendCodeResponse {
+  string code = 1;
+  int64 created_at_ms = 2;
+  int64 expires_at_ms = 3;
+}
+
+message RedeemFriendCodeRequest {
+  string code = 1;
+}
+
+message RedeemFriendCodeResponse {
+  FriendView friend = 1;
+  bool newly_created = 2;
+}
+
+message ListFriendsRequest {}
+
+message ListFriendsResponse {
+  repeated FriendView friends = 1;
+}
+
+message FriendView {
+  uint64 player_id = 1;
+  string account_name = 2;
+  int64 created_at_ms = 3;
+}
+
+message EnterFriendFarmRequest {
+  uint64 owner_player_id = 1;
+}
+
+message EnterFriendFarmResponse {
+  bytes visit_id = 1;
+  int64 expires_at_ms = 2;
+  FarmVisitSnapshot snapshot = 3;
+}
+
+message FarmHeartbeatRequest {
+  uint64 owner_player_id = 1;
+  bytes visit_id = 2;
+}
+
+message FarmHeartbeatResponse {
+  int64 expires_at_ms = 1;
+}
+
+message ExitFriendFarmRequest {
+  uint64 owner_player_id = 1;
+  bytes visit_id = 2;
+}
+
+message ExitFriendFarmResponse {}
+
+message ApplyPestToFriendRequest {
+  uint64 owner_player_id = 1;
+  bytes visit_id = 2;
+  uint32 plot_id = 3;
+  uint32 pest_id = 4;
+}
+
+message ApplyPestToFriendResponse {
+  PublicPlotView owner_plot = 1;
+}
+
+message CatchPestForFriendRequest {
+  uint64 owner_player_id = 1;
+  bytes visit_id = 2;
+  uint32 plot_id = 3;
+}
+
+message CatchPestForFriendResponse {
+  PublicPlotView owner_plot = 1;
+}
+
+message StealFriendCropRequest {
+  uint64 owner_player_id = 1;
+  bytes visit_id = 2;
+  uint32 plot_id = 3;
+  uint32 expected_crop_item_id = 4;
+  int64 expected_planted_at_ms = 5;
+  uint32 expected_steal_quantity = 6;
+}
+
+message StealFriendCropResponse {
+  uint32 crop_item_id = 1;
+  uint32 stolen_quantity = 2;
+  PlayerStatePatch visitor_patch = 3;
+  PublicPlotView owner_plot = 4;
+}
+
+message FarmVisitSnapshot {
+  uint64 owner_player_id = 1;
+  repeated PublicPlotView plots = 2;
+  StateVersion owner_state_version = 3;
+}
+
+message PublicPlotView {
+  uint32 plot_id = 1;
+  .classicfarm.ws.v1.plot.PlotState plot_state = 2;
+  uint32 crop_id = 3;
+  uint32 crop_item_id = 4;
+  int64 planted_at_ms = 5;
+  int64 estimated_mature_at_ms = 6;
+  uint32 harvestable_quantity = 7;
+  uint32 steal_count = 8;
+  bool can_steal = 9;
+  uint32 steal_quantity = 10;
+  bool pest_active = 11;
 }

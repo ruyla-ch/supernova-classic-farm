@@ -33,6 +33,15 @@ This directory separates current project truth, design reasoning, executable con
   persists a post-migration write at epoch two. Coordinator restart rebuilds
   routes from fences, overlays open PREPARING fail-closed, and exposes
   inspect/continue/abandon controls backed by durable migration progress.
+- Gate and every Zone now use one shared loopback HTTP long-poll SDK to load
+  and atomically replace the committed route Snapshot. Ordinary commands and
+  friend Owner lookup read local caches; `NOT_OWNER` forces one synchronous
+  resync before retry.
+- The friend branch implements free Owner/friend pest catch and visit-authorized
+  cross-Zone pest apply. Only the Owner Actor mutates; exact timed effects,
+  retained replay, source restriction, private/public Push fanout, MySQL
+  checkpoint recovery, and dual-Zone behavior are verified in
+  `evidence/2026-09-03-friend-pest-gameplay.md`.
 - The H5 exposes the complete owner loop through a responsive shop, plot, inventory and chapter interface. A browser-driven in-memory run reached `player_seq=8`, consumed one maturity Push and completed without version-gap recovery; type-check, production build and a 320-pixel no-overflow check pass.
 - The default no-DSN run keeps accounts, Sessions, tickets, routes and Player Actors in process-local development memory.
 - An optional MySQL code path commits account, first Session and initial Player checkpoint in one transaction, loads it on Actor activation, and asynchronously flushes Actor mutations under checkpoint CAS and a database Fence. The single-Zone path has live fresh-process full-loop `player_seq=8` recovery; the static dual-Zone path has live Zone-A/Zone-B `player_seq=1` persistence evidence.
@@ -43,7 +52,12 @@ This directory separates current project truth, design reasoning, executable con
 - `CLAIM_CHAPTER_REWARD` grants the accepted first-chapter reward, activates development chapter two and retains an idempotent receipt. Warehouse overflow creates one deterministic pending reward-mail Outbox record; checkpoint CAS and relational Outbox insertion share one MySQL transaction. Unit tests, mocked SQL and live in-memory/MySQL flows through fresh-process `player_seq=7` recovery pass.
 - `CLEAN_PLOT` requires `NEED_CLEANUP`, clears all frozen crop fields and returns the plot to `EMPTY` without resources or task progress. Unit/checkpoint tests and live in-memory/MySQL full owner loops through fresh-process `player_seq=8` recovery pass.
 - The Outbox relay, Mail Service, delivery reconciliation and mail UI are not implemented, so `items_pending_mail` means only that Actor state recorded a pending event.
-- The local Push transport is loopback and non-durable; cross-Gate delivery, retry and production backpressure are not implemented. Tickets and CSRF remain process-local in both modes. A combined MySQL-backed browser run, abnormal Dirty-window loss and capacity evidence remain future work.
+- The local Push transport is loopback and non-durable. Every plot mutation is
+  projected privately to the online Owner and publicly to current Visitors
+  through one configured Gate endpoint. Cross-Gate delivery, retry and
+  production backpressure are not implemented. Tickets and CSRF remain
+  process-local in both modes. A combined MySQL-backed browser run, abnormal
+  Dirty-window loss and capacity evidence remain future work.
 - Coordinator route and migration progress remain process-local. Restart after
   a durable migrated Fence intentionally fails closed; persistent PREPARING
   recovery is not yet implemented.

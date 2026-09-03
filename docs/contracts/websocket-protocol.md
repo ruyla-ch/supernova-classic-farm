@@ -89,9 +89,25 @@ All display text comes from the versioned client configuration package. IDs and 
 | 205 | `SELL_CROP` |
 | 206 | `CLAIM_CHAPTER_REWARD` |
 | 207 | `BUY_FERTILIZER` |
+| 208 | `CATCH_PEST` |
+| 300 | `CREATE_FRIEND_CODE` |
+| 301 | `REDEEM_FRIEND_CODE` |
+| 302 | `LIST_FRIENDS` |
+| 310 | `ENTER_FRIEND_FARM` |
+| 311 | `FARM_HEARTBEAT` |
+| 312 | `EXIT_FRIEND_FARM` |
+| 320 | `APPLY_PEST_TO_FRIEND` |
+| 321 | `CATCH_PEST_FOR_FRIEND` |
+| 323 | `STEAL_FRIEND_CROP` |
 | 1000 | `PLAYER_STATE_CHANGED` |
+| 1001 | `FRIEND_FARM_CHANGED` |
 
-Numbers 3–99, 102–199, 208–999 and 1001–1999 are reserved for compatible expansion. Removed values remain reserved.
+Numbers 3–99, 102–199, 209–299, 303–309, 313–319, 322, 324–999 and
+1002–1999 are reserved for compatible expansion. Removed values remain
+reserved. Actions 300–302, 310–312, 320–321, 323 and 1001 are implemented on
+`feat/mysql-friend-visit-steal`; action 208 is the implemented Owner-side pest
+counterpart. This branch extension is live-verified but does not change the
+accepted midterm boundary on `main`.
 
 ## 5. Common envelope
 
@@ -182,7 +198,8 @@ The package contains names, descriptions, image URLs and display-only rules. It 
 | Field | Type | Meaning |
 |---|---|---|
 | `server_config_version` | `uint64` | Zone snapshot used for this response |
-| `entries` | repeated `ShopEntryView` | All active V1 seed-sale entries |
+| `entries` | repeated `ShopEntryView` | All active seed, fertilizer, and crop-buyback entries, sorted by `shop_entry_id` |
+| `crops` | repeated `CropCatalogEntryView` | Enabled crop presentation and quote mapping, sorted by `crop_id` |
 
 `ShopEntryView`:
 
@@ -193,6 +210,26 @@ The package contains names, descriptions, image URLs and display-only rules. It 
 | `unit_price` | `int64` |
 | `price_version` | `uint64` |
 | `enabled` | `bool` |
+
+`CropCatalogEntryView`:
+
+| Field | Type | Meaning |
+|---|---|---|
+| `crop_id` | `uint32` | Stable crop identity |
+| `name` | `string` | Client display name |
+| `seed_item_id` | `uint32` | Seed inventory identity used by `PLANT` |
+| `crop_item_id` | `uint32` | Harvested inventory identity used by `SELL_CROP` |
+| `maturity_seconds` | `uint64` | Display-only base maturity duration |
+| `base_yield` | `uint32` | Display-only base yield |
+| `seed_unit_price` | `int64` | Current seed quote copied from the active shop entry |
+| `seed_price_version` | `uint64` | Version required by `BUY_SEEDS` |
+| `seed_shop_entry_id` | `uint32` | Entry required by `BUY_SEEDS` |
+| `sell_unit_price` | `int64` | Current crop buyback quote |
+| `sell_price_version` | `uint64` | Version required by `SELL_CROP` |
+
+The catalog is client presentation and command-selection data. The pinned Zone
+configuration remains authoritative for planting, prices, growth, yield, and
+steal fields.
 
 The client buys a quoted `shop_entry_id`, not a bare item ID. This preserves the identity of a quote when one item later has normal, discount or event entries.
 
@@ -359,7 +396,20 @@ V1 self-cleaning consumes no item, grants no reward and advances no task. A
 
 `CleanPlotResponse` contains a patch with the EMPTY plot.
 
-### 10.7 SELL_CROP
+### 10.7 CATCH_PEST
+
+`CatchPestRequest` contains `plot_id`. It targets the authenticated Owner's
+Actor and is valid only for a `GROWING` plot with a pest active at pinned
+server time.
+
+Before removal, the Actor settles growth exactly through server time under the
+old fertilizer/pest rates. It then clears the pest and recomputes
+`estimated_mature_at_ms`. Catching is free: it consumes no inventory, grants
+no item, coin or reward, and advances no task.
+
+`CatchPestResponse` contains a patch with the changed private `PlotView`.
+
+### 10.8 SELL_CROP
 
 `SellCropRequest` contains:
 
@@ -373,7 +423,7 @@ For `sell_all`, the Actor resolves the current full stack quantity at execution 
 
 `SellCropResponse` contains `crop_item_id`, `sold_quantity`, `unit_price`, `total_price` and a patch with inventory, coin balance and current chapter.
 
-### 10.8 CLAIM_CHAPTER_REWARD
+### 10.9 CLAIM_CHAPTER_REWARD
 
 `ClaimChapterRewardRequest` contains `chapter_id`. Explicit chapter identity prevents a stale screen from accidentally claiming a later chapter.
 
@@ -391,13 +441,15 @@ For `sell_all`, the Actor resolves the current full stack quantity at execution 
 
 ## 11. Push
 
-V1 uses one Push action: `PLAYER_STATE_CHANGED`.
+The accepted V1 owner loop uses `PLAYER_STATE_CHANGED`. The implemented friend
+branch extension adds `FRIEND_FARM_CHANGED` without changing the accepted
+`main` boundary.
 
 `PlayerStateChangedPush`:
 
 | Field | Type | Meaning |
 |---|---|---|
-| `reason` | `StateChangeReason` | `BUY_SEEDS`, `BUY_FERTILIZER`, `PLANT`, `APPLY_FERTILIZER`, `MATURED`, `HARVEST`, `CLEAN_PLOT`, `SELL_CROP`, `CLAIM_CHAPTER_REWARD` |
+| `reason` | `StateChangeReason` | `BUY_SEEDS`, `BUY_FERTILIZER`, `PLANT`, `APPLY_FERTILIZER`, `MATURED`, `HARVEST`, `CLEAN_PLOT`, `SELL_CROP`, `CLAIM_CHAPTER_REWARD`, `FRIEND_STEAL`, `APPLY_PEST_TO_FRIEND`, `CATCH_PEST_FOR_FRIEND`, `CATCH_PEST` |
 | `caused_by_request_id` | optional `string` | Present for command-caused changes |
 | `patch` | `PlayerStatePatch` | Authoritative delta |
 
@@ -461,7 +513,109 @@ There is no V1 persistent delta replay endpoint.
 
 Normal business errors such as insufficient coins, full inventory, immature crop, active fertilizer or changed price return a failed RESPONSE and keep the connection open.
 
-## 15. Validation checklist
+## 15. Implemented MySQL friend extension
+
+This section is implemented and live-verified on
+`feat/mysql-friend-visit-steal`; it does not change the accepted midterm
+boundary on `main`.
+
+- `CREATE_FRIEND_CODE`, `REDEEM_FRIEND_CODE`, and `LIST_FRIENDS` set
+  `target_player_id` to the authenticated caller.
+- `CreateFriendCodeRequest` and `ListFriendsRequest` are empty.
+  `CreateFriendCodeResponse` contains `code`, `created_at_ms`, and
+  `expires_at_ms`.
+- `RedeemFriendCodeRequest` contains `code`.
+  `RedeemFriendCodeResponse` contains the peer `FriendView` and
+  `newly_created`.
+- `FriendView` contains only `player_id`, `account_name`, and relationship
+  `created_at_ms`.
+- Friend codes are opaque ASCII strings, expire after 24 hours, and a new code
+  replaces the caller's prior current code. A player cannot redeem their own
+  code.
+- One unordered player pair has at most one active relationship. Redeeming an
+  already-active relationship succeeds with `newly_created=false`.
+- `LIST_FRIENDS` returns at most 100 active friends ordered by
+  `(created_at_ms, player_id)`.
+- Gate forwards actions 300–302 to FriendSvr over loopback HTTP using the
+  original Protobuf envelope and a trusted caller header. FriendSvr never
+  trusts a caller identity inside the payload.
+- Actions 310–312, 320–321, and 323 set `target_player_id` to the
+  authenticated Visitor; the payload carries the farm Owner ID. Gate routes
+  them to the Visitor's Zone.
+- `ENTER_FRIEND_FARM` carries `owner_player_id` and returns a 16-byte
+  `visit_id`, `expires_at_ms`, and `FarmVisitSnapshot`.
+- `FARM_HEARTBEAT` and `EXIT_FRIEND_FARM` carry `owner_player_id` plus the
+  16-byte `visit_id`. Heartbeat returns the renewed expiry.
+- `FarmVisitSnapshot` contains `owner_player_id`, `owner_state_version`, and
+  ordered `PublicPlotView` values. It excludes Owner coins, inventory, chapter,
+  tasks, idempotency results and per-visitor steal history.
+- `PublicPlotView` contains `plot_id`, `plot_state`, `crop_id`, `crop_item_id`,
+  `planted_at_ms`, `estimated_mature_at_ms`, `harvestable_quantity`,
+  `steal_count`, `can_steal`, `steal_quantity`, and `pest_active`. It exposes
+  only whether a pest is active; pest identity, source, frozen modifier and
+  interval remain private.
+- `APPLY_PEST_TO_FRIEND` carries `owner_player_id`, the exact 16-byte
+  `visit_id`, `plot_id`, and `pest_id`. `CATCH_PEST_FOR_FRIEND` carries the
+  same fields except `pest_id`. Both set envelope `target_player_id` to the
+  authenticated Visitor, require a current visit lease and a current mutual
+  friendship, then route to the farm Owner's current Zone.
+- Successful friend apply/catch returns the changed Owner `PublicPlotView`.
+  Its envelope has no `state_version`: the only mutated business aggregate is
+  the Owner Actor, and the Owner version is carried by the resulting private
+  and public Pushes.
+- The current development configuration authority defines only `pest_id=1`:
+  `config_version=1`, modifier `-0.3`, duration `120000ms`, enabled. Apply is
+  valid only on `GROWING` with no active pest. It settles the old rate exactly
+  to server time, creates a frozen `[start_at_ms, end_at_ms)` PEST effect with
+  `source_player_id`, then recomputes maturity. Fertilizer and pest modifiers
+  are additive over their exact overlapping intervals.
+- Owner and friend catch are valid only while the plot is `GROWING` and the
+  pest remains active after settlement to server time. Catch then clears the
+  effect and recomputes maturity. The Visitor who applied the current pest
+  cannot catch it; the Owner or a different currently authorized mutual
+  friend can.
+- All three pest actions are free: they consume no item or inventory, grant no
+  item, coin or reward, and advance no task.
+- Invalid/zero fields return `INVALID_ARGUMENT`. Visit and friendship failures
+  return `VISIT_NOT_FOUND`/`VISIT_EXPIRED` or `NOT_MUTUAL_FRIEND`.
+  Owner-Actor validation returns `PLOT_NOT_FOUND`, `PLOT_STATE_CONFLICT`,
+  `PEST_ALREADY_ACTIVE`, `PEST_NOT_ACTIVE`, `PEST_SOURCE_FORBIDDEN`,
+  `CONFIG_ENTRY_DISABLED`, or retryable `CONFIG_UNAVAILABLE` as applicable.
+  At the exact pest end boundary, settlement expires the effect and catch
+  deterministically returns `PEST_NOT_ACTIVE` without changing `player_seq`.
+- `STEAL_FRIEND_CROP` carries `owner_player_id`, `visit_id`, `plot_id`,
+  `expected_crop_item_id`, `expected_planted_at_ms`, and
+  `expected_steal_quantity`.
+- Successful steal returns the item and quantity, a Visitor `PlayerStatePatch`,
+  and the changed Owner `PublicPlotView`. Its envelope `state_version` belongs
+  only to the Visitor Actor.
+- Visit leases last 90 seconds and are process-local. Heartbeat renews them;
+  restart invalidates them.
+- Owner public-plot mutations emit `FRIEND_FARM_CHANGED` best-effort to each
+  current visit lease. Its envelope targets the Visitor but has no envelope
+  `state_version`; the payload carries `owner_player_id`, the exact 16-byte
+  `visit_id`, `owner_state_version`, and ordered changed `PublicPlotView`
+  values.
+- The H5 applies a friend-farm Push only when Owner and visit ID still match
+  the current visit. It ignores equal or older Owner versions. A higher
+  `player_seq` need not be contiguous because private Owner mutations can
+  advance the Player Actor without producing a public farm change.
+- Every plot mutation also emits `PLAYER_STATE_CHANGED` to the online Owner
+  using the private `PlotView` projection and the same Owner state version.
+  Pest mutations use reasons `APPLY_PEST_TO_FRIEND`,
+  `CATCH_PEST_FOR_FRIEND`, or `CATCH_PEST`. The same event fans out a
+  `FRIEND_FARM_CHANGED` public projection to every current visit lease.
+  Replayed or failed friend steals and pest actions emit neither a duplicate
+  Owner Push nor a duplicate Visitor Push. Owner command responses and their
+  Push may race, so the H5 treats an equal state version as an already-applied
+  duplicate.
+- Owner-side visit registration precedes snapshot capture. Therefore a Push
+  that races before the ENTER response may be ignored by the H5, but the
+  returned snapshot is captured after registration and covers that change.
+- Zone-to-Zone and Zone-to-Friend calls use loopback HTTP with dedicated
+  Protobuf messages. This extension does not declare or use gRPC services.
+
+## 16. Validation checklist
 
 Implementation tests MUST prove:
 

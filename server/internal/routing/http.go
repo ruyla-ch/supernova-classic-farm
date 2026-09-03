@@ -22,22 +22,41 @@ func NewHTTPHandler(routes *Map, clock Clock) http.Handler {
 	var shardLookups atomic.Uint64
 	mux.HandleFunc("GET /internal/v1/routes", func(w http.ResponseWriter, r *http.Request) {
 		snapshotLookups.Add(1)
-		now := clock().UTC()
-		snapshot := routes.Snapshot()
-		response := snapshotResponse{
-			ShardCount:                 snapshot.ShardCount,
-			HashAlgorithmVersion:       snapshot.HashAlgorithmVersion,
-			AssignmentAlgorithmVersion: snapshot.AssignmentAlgorithmVersion,
-			MapVersion:                 strconv.FormatUint(snapshot.MapVersion, 10),
-			CommittedTerm:              strconv.FormatUint(snapshot.CommittedTerm, 10),
-			CommittedIndex:             strconv.FormatUint(snapshot.CommittedIndex, 10),
-			Entries:                    make([]routeResponse, len(snapshot.Entries)),
+		writeJSON(w, http.StatusOK, snapshotResponseFrom(routes.Snapshot(), clock()))
+	})
+	mux.HandleFunc("GET /internal/v1/routes/watch", func(w http.ResponseWriter, r *http.Request) {
+		after, err := parseNonNegativeUint(r.URL.Query().Get("after_map_version"))
+		if err != nil {
+			writeJSON(w, http.StatusBadRequest, errorResponse{
+				Code: "INVALID_MAP_VERSION", Message: "after_map_version must be a non-negative decimal integer",
+			})
+			return
 		}
-		for index, entry := range snapshot.Entries {
-			routable := entry.State == RouteStateActive && now.Before(entry.LeaseExpiresAt)
-			response.Entries[index] = routeResponseFrom(entry, snapshot.MapVersion, routable)
+		timeout, err := watchTimeout(r.URL.Query().Get("timeout_ms"))
+		if err != nil {
+			writeJSON(w, http.StatusBadRequest, errorResponse{
+				Code: "INVALID_TIMEOUT", Message: "timeout_ms must be a positive decimal integer",
+			})
+			return
 		}
-		writeJSON(w, http.StatusOK, response)
+		timer := time.NewTimer(timeout)
+		defer timer.Stop()
+		ticker := time.NewTicker(20 * time.Millisecond)
+		defer ticker.Stop()
+		for {
+			if routes.MapVersion() > after {
+				writeJSON(w, http.StatusOK, snapshotResponseFrom(routes.Snapshot(), clock()))
+				return
+			}
+			select {
+			case <-r.Context().Done():
+				return
+			case <-timer.C:
+				w.WriteHeader(http.StatusNoContent)
+				return
+			case <-ticker.C:
+			}
+		}
 	})
 	mux.HandleFunc("GET /internal/v1/routes/{shard_id}", func(w http.ResponseWriter, r *http.Request) {
 		shardLookups.Add(1)
@@ -78,6 +97,45 @@ func NewHTTPHandler(routes *Map, clock Clock) http.Handler {
 		})
 	})
 	return mux
+}
+
+func snapshotResponseFrom(snapshot Snapshot, now time.Time) snapshotResponse {
+	response := snapshotResponse{
+		ShardCount:                 snapshot.ShardCount,
+		HashAlgorithmVersion:       snapshot.HashAlgorithmVersion,
+		AssignmentAlgorithmVersion: snapshot.AssignmentAlgorithmVersion,
+		MapVersion:                 strconv.FormatUint(snapshot.MapVersion, 10),
+		CommittedTerm:              strconv.FormatUint(snapshot.CommittedTerm, 10),
+		CommittedIndex:             strconv.FormatUint(snapshot.CommittedIndex, 10),
+		Entries:                    make([]routeResponse, len(snapshot.Entries)),
+	}
+	now = now.UTC()
+	for index, entry := range snapshot.Entries {
+		routable := entry.State == RouteStateActive && now.Before(entry.LeaseExpiresAt)
+		response.Entries[index] = routeResponseFrom(entry, snapshot.MapVersion, routable)
+	}
+	return response
+}
+
+func parseNonNegativeUint(raw string) (uint64, error) {
+	if raw == "" {
+		return 0, nil
+	}
+	return strconv.ParseUint(raw, 10, 64)
+}
+
+func watchTimeout(raw string) (time.Duration, error) {
+	if raw == "" {
+		return 25 * time.Second, nil
+	}
+	value, err := strconv.ParseUint(raw, 10, 32)
+	if err != nil || value == 0 {
+		return 0, errors.New("invalid timeout")
+	}
+	if value > 30_000 {
+		value = 30_000
+	}
+	return time.Duration(value) * time.Millisecond, nil
 }
 
 type routeResponse struct {

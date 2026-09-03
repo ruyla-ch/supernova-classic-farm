@@ -12,6 +12,7 @@ import (
 	wsv1 "github.com/Wriosley/supernova-classic-farm/server/gen/classicfarm/v1/ws"
 	"github.com/Wriosley/supernova-classic-farm/server/internal/player"
 	"github.com/Wriosley/supernova-classic-farm/server/internal/routing"
+	"github.com/Wriosley/supernova-classic-farm/server/internal/visit"
 	"google.golang.org/protobuf/proto"
 )
 
@@ -21,6 +22,7 @@ type runtimeHandler struct {
 	runtime       *player.Runtime
 	authorization ownerAuthorization
 	gates         *shardExecutionGates
+	visit         *visit.Service
 	now           func() time.Time
 }
 
@@ -46,7 +48,7 @@ func newOwnedCommandHandlerWithGates(
 	authorization ownerAuthorization,
 	gates *shardExecutionGates,
 	now func() time.Time,
-) http.Handler {
+) *runtimeHandler {
 	if now == nil {
 		now = time.Now
 	}
@@ -115,7 +117,16 @@ func (h *runtimeHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	response, err := h.runtime.Handle(r.Context(), callerPlayerID, ownerEpoch, request)
+	var response *wsv1.WsEnvelope
+	if isVisitAction(request.Action) {
+		if h.visit == nil {
+			writeError(w, http.StatusServiceUnavailable, "VISIT_UNAVAILABLE")
+			return
+		}
+		response, err = h.visit.Handle(r.Context(), callerPlayerID, ownerEpoch, request)
+	} else {
+		response, err = h.runtime.Handle(r.Context(), callerPlayerID, ownerEpoch, request)
+	}
 	switch {
 	case errors.Is(err, player.ErrNotOwner):
 		writeNotOwner(w, h.authorization, shardID)
@@ -136,6 +147,20 @@ func (h *runtimeHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/x-protobuf")
 	w.WriteHeader(http.StatusOK)
 	_, _ = w.Write(encoded)
+}
+
+func isVisitAction(action wsv1.Action) bool {
+	switch action {
+	case wsv1.Action_ENTER_FRIEND_FARM,
+		wsv1.Action_FARM_HEARTBEAT,
+		wsv1.Action_EXIT_FRIEND_FARM,
+		wsv1.Action_APPLY_PEST_TO_FRIEND,
+		wsv1.Action_CATCH_PEST_FOR_FRIEND,
+		wsv1.Action_STEAL_FRIEND_CROP:
+		return true
+	default:
+		return false
+	}
 }
 
 type localAuthorization struct{}

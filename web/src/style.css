@@ -48,6 +48,74 @@ button:disabled {
   padding: clamp(2rem, 7vw, 5rem) 0 4rem;
 }
 
+.login-shell {
+  display: grid;
+  min-height: 100vh;
+  place-items: center;
+  padding: 1.5rem;
+}
+
+.login-card {
+  width: min(100%, 26rem);
+  padding: clamp(1.5rem, 5vw, 2.5rem);
+  border: 2px solid #71895e;
+  border-radius: 1.35rem;
+  background: rgb(255 253 244 / 94%);
+  box-shadow: 0 1.2rem 3rem rgb(42 61 35 / 18%);
+  text-align: center;
+}
+
+.login-title {
+  margin: 0;
+  color: #2f5b2c;
+  font-size: clamp(3rem, 12vw, 4.5rem);
+}
+
+.login-copy {
+  margin: 0.7rem 0 0;
+  color: #596455;
+  font-size: 0.86rem;
+}
+
+.login-form {
+  grid-template-columns: 1fr;
+  text-align: left;
+}
+
+.login-form button {
+  margin-top: 0.35rem;
+}
+
+.game-shell {
+  display: grid;
+  gap: 0.8rem;
+  width: min(100% - 1.5rem, 78rem);
+  margin: 0 auto;
+  padding: 0.75rem 0 1.5rem;
+}
+
+.shell-notice {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.75rem;
+  margin: 0;
+  padding: 0.6rem 0.9rem;
+  border: 1px solid #d7bd7e;
+  border-radius: 0.7rem;
+  background: #fff5d8;
+  color: #73501f;
+  font-size: 0.85rem;
+  font-weight: 700;
+}
+
+.shell-notice button {
+  flex: none;
+  min-height: 2.3rem;
+  padding: 0.35rem 0.8rem;
+  font-size: 0.8rem;
+}
+
 .pixel-art {
   image-rendering: pixelated;
 }
@@ -202,34 +270,59 @@ button:disabled {
 
 .plots-grid {
   display: grid;
-  grid-template-columns: 1fr 1fr;
-  gap: 0.7rem;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 0.35rem;
+  width: min(100%, 44rem, calc(100vh - 18rem));
   margin-top: 0.8rem;
+  margin-inline: auto;
+  padding: 0.6rem;
+  border-radius: 1rem;
+  background:
+    linear-gradient(rgb(255 255 255 / 7%) 1px, transparent 1px),
+    linear-gradient(90deg, rgb(255 255 255 / 7%) 1px, transparent 1px),
+    #8eb86d;
+  background-size: 32px 32px;
 }
 
 .plot-tile {
   position: relative;
-  display: grid;
-  gap: 0.35rem;
+  display: flex;
+  flex-direction: column;
+  justify-content: space-between;
+  aspect-ratio: 1;
   min-width: 0;
-  padding: 0.55rem;
-  border: 2px solid #9a7a50;
-  background: #f5e7bd;
+  padding: 0.3rem;
+  border: 0;
+  border-radius: 0.7rem;
+  background: transparent;
+  box-shadow: none;
   text-align: left;
 }
 
-.plot-tile.valid {
-  border-color: #527b46;
-  box-shadow: 0 0 0 2px rgb(82 123 70 / 12%);
+.plot-tile::before {
+  position: absolute;
+  inset: 0.1rem;
+  z-index: 1;
+  border-radius: 0.6rem;
+  content: "";
+  pointer-events: none;
+  transition: box-shadow 120ms ease;
+}
+
+.plot-tile.valid::before {
+  box-shadow: inset 0 0 0 2px rgb(247 255 232 / 75%);
+}
+
+.plot-tile.valid:hover::before {
+  box-shadow: inset 0 0 0 3px #f7ffe8;
 }
 
 .plot-tile.invalid {
   filter: saturate(0.72);
 }
 
-.plot-tile.invalid:hover {
-  border-color: #b45f50;
-  box-shadow: 0 0 0 2px rgb(180 95 80 / 12%);
+.plot-tile.invalid:hover::before {
+  box-shadow: inset 0 0 0 2px rgb(180 95 80 / 60%);
 }
 
 .plots-grid[data-tool="seed"] .plot-tile {
@@ -249,21 +342,36 @@ button:disabled {
 }
 
 .plot-number {
-  color: #6b7c54;
-  font-size: 0.62rem;
+  position: relative;
+  z-index: 2;
+  color: #f6ffe8;
+  font-size: 0.58rem;
   font-weight: 900;
-  letter-spacing: 0.1em;
+  letter-spacing: 0.08em;
+  text-shadow: 0 1px 0 rgb(28 44 22 / 75%);
 }
 
-.plot-tile > strong {
-  color: #33472e;
-  font-size: 0.78rem;
+.plot-caption {
+  position: relative;
+  z-index: 2;
+  display: grid;
+  gap: 0.05rem;
+  text-shadow: 0 1px 0 rgb(28 44 22 / 80%);
 }
 
-.plot-tile > small {
-  min-height: 1.9rem;
-  color: #66705d;
-  font-size: 0.65rem;
+.plot-caption strong {
+  color: #fdfff5;
+  font-size: 0.7rem;
+}
+
+.plot-caption small {
+  display: -webkit-box;
+  overflow: hidden;
+  color: #e6f2cf;
+  font-size: 0.58rem;
+  line-height: 1.25;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
 }
 
 .plot-busy {
@@ -279,45 +387,34 @@ button:disabled {
 }
 
 .plot-stage {
-  position: relative;
-  display: grid;
-  min-height: 8.5rem;
-  place-items: center;
-  overflow: hidden;
-  border: 2px solid #755331;
-  border-radius: 0.8rem;
-  background:
-    linear-gradient(45deg, rgb(255 255 255 / 8%) 25%, transparent 25%) 0 0 / 20px 20px,
-    #80ad62;
-}
-
-.plot-stage::after {
   position: absolute;
-  inset: auto 0 0;
-  height: 24%;
-  background: #d7b56e;
-  content: "";
-  opacity: 0.35;
+  inset: 0;
+  z-index: 0;
+  display: grid;
+  place-items: center;
+  border: 0;
+  background: transparent;
 }
 
 .plot-base {
-  width: min(78%, 8rem);
-  z-index: 1;
+  width: 92%;
+  z-index: 0;
+  filter: drop-shadow(0 0.2rem 0 rgb(51 74 36 / 18%));
 }
 
 .plot-crop {
   position: absolute;
-  z-index: 2;
-  width: min(36%, 4rem);
-  filter: drop-shadow(0 0.45rem 0 rgb(51 74 36 / 20%));
+  z-index: 1;
+  width: 46%;
+  filter: drop-shadow(0 0.35rem 0 rgb(51 74 36 / 20%));
 }
 
 .plot-effect {
   position: absolute;
-  top: 0.5rem;
-  right: 0.5rem;
-  z-index: 3;
-  width: 1.8rem;
+  top: 0.3rem;
+  right: 0.3rem;
+  z-index: 2;
+  width: 1.3rem;
   animation: effect-pulse 1.6s ease-in-out infinite;
 }
 
@@ -393,6 +490,17 @@ button:disabled {
   color: #46583f;
   font-size: 0.75rem;
   font-weight: 800;
+}
+
+.sell-crop-picker {
+  display: grid;
+  gap: 0.35rem;
+  font-size: 0.85rem;
+}
+
+.sell-crop-picker select {
+  min-height: 2.5rem;
+  max-width: 100%;
 }
 
 .sell-controls .quantity-row {
@@ -819,13 +927,14 @@ input:focus {
     grid-template-columns: 1fr;
   }
 
+  .plots-grid {
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+    width: min(100%, 32rem);
+  }
+
   .toolbelt {
     align-items: stretch;
     flex-direction: column;
-  }
-
-  .plot-stage {
-    min-height: 8rem;
   }
 
   .task-list {
@@ -860,8 +969,9 @@ input:focus {
     grid-template-columns: 1fr 1fr;
   }
 
-  .plot-stage {
-    min-height: 7rem;
+  .plots-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    width: 100%;
   }
 
   .quantity-row,

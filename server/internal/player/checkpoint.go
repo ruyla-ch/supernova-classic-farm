@@ -236,7 +236,10 @@ func validatePlotRecord(plot *datav1.PlotStateRecord) error {
 			plot.BaseGrowthRate != nil || plot.BaseYield != 0 ||
 			plot.StolenQuantity != 0 || plot.SettledGrowthValue != nil ||
 			plot.LastSettledAtMs != 0 || plot.EstimatedMatureAtMs != nil ||
-			plot.FertilizerEffect != nil || plot.PestEffect != nil {
+			plot.FertilizerEffect != nil || plot.PestEffect != nil ||
+			plot.StealQuantity != 0 || plot.MaxStealTimes != 0 ||
+			plot.ProtectedOwnerYield != 0 || plot.StealCount != 0 ||
+			len(plot.StolenVisitorPlayerIds) != 0 {
 			return errors.New("EMPTY plot contains crop fields")
 		}
 	case datav1.PlotRecordState_GROWING:
@@ -278,6 +281,43 @@ func validatePlotRecord(plot *datav1.PlotStateRecord) error {
 	default:
 		return errors.New("checkpoint plot state is invalid")
 	}
+	return validatePlotStealFields(plot)
+}
+
+func validatePlotStealFields(plot *datav1.PlotStateRecord) error {
+	legacy := plot.StealQuantity == 0 && plot.MaxStealTimes == 0 &&
+		plot.ProtectedOwnerYield == 0
+	if legacy {
+		if plot.StealCount != 0 || len(plot.StolenVisitorPlayerIds) != 0 {
+			return errors.New("legacy plot contains steal history")
+		}
+		return nil
+	}
+	if plot.StealQuantity == 0 || plot.MaxStealTimes == 0 ||
+		plot.ProtectedOwnerYield == 0 ||
+		plot.ProtectedOwnerYield >= plot.BaseYield ||
+		plot.StealCount > plot.MaxStealTimes ||
+		uint32(len(plot.StolenVisitorPlayerIds)) != plot.StealCount {
+		return errors.New("plot steal fields are invalid")
+	}
+	expectedStolen := uint64(plot.StealQuantity) * uint64(plot.StealCount)
+	if expectedStolen != uint64(plot.StolenQuantity) ||
+		expectedStolen+uint64(plot.ProtectedOwnerYield) > uint64(plot.BaseYield) {
+		return errors.New("plot stolen quantity is invalid")
+	}
+	if plot.State == datav1.PlotRecordState_GROWING && plot.StealCount != 0 {
+		return errors.New("growing plot contains steal history")
+	}
+	seen := make(map[uint64]struct{}, len(plot.StolenVisitorPlayerIds))
+	for _, visitorID := range plot.StolenVisitorPlayerIds {
+		if visitorID == 0 {
+			return errors.New("plot contains zero steal visitor")
+		}
+		if _, exists := seen[visitorID]; exists {
+			return errors.New("plot contains duplicate steal visitor")
+		}
+		seen[visitorID] = struct{}{}
+	}
 	return nil
 }
 
@@ -296,6 +336,11 @@ func validateTimedEffect(effect *datav1.TimedEffectRecord, kind datav1.EffectKin
 	}
 	if kind == datav1.EffectKind_FERTILIZER && effect.Modifier.ScaledValue <= 0 {
 		return errors.New("fertilizer effect modifier is not positive")
+	}
+	if kind == datav1.EffectKind_PEST &&
+		(effect.SourcePlayerId == nil || effect.GetSourcePlayerId() == 0 ||
+			effect.Modifier.ScaledValue >= 0) {
+		return errors.New("pest effect source or modifier is invalid")
 	}
 	return nil
 }
@@ -451,7 +496,10 @@ func plotFromRecord(record *datav1.PlotStateRecord) *Plot {
 		CropID: record.CropId, CropItemID: record.CropItemId,
 		CropConfigVersion: record.CropConfigVersion, PlantedAtMS: record.PlantedAtMs,
 		BaseYield: record.BaseYield, StolenQuantity: record.StolenQuantity,
-		LastSettledAtMS: record.LastSettledAtMs,
+		StealQuantity: record.StealQuantity, MaxStealTimes: record.MaxStealTimes,
+		ProtectedOwnerYield: record.ProtectedOwnerYield, StealCount: record.StealCount,
+		StolenVisitorPlayerIDs: append([]uint64(nil), record.StolenVisitorPlayerIds...),
+		LastSettledAtMS:        record.LastSettledAtMs,
 	}
 	if record.MaturityValue != nil {
 		plot.MaturityValueScaled9 = record.MaturityValue.ScaledValue
@@ -484,7 +532,10 @@ func (p *Plot) Record() (*datav1.PlotStateRecord, error) {
 		CropId: p.CropID, CropItemId: p.CropItemID,
 		CropConfigVersion: p.CropConfigVersion, PlantedAtMs: p.PlantedAtMS,
 		BaseYield: p.BaseYield, StolenQuantity: p.StolenQuantity,
-		LastSettledAtMs: p.LastSettledAtMS,
+		StealQuantity: p.StealQuantity, MaxStealTimes: p.MaxStealTimes,
+		ProtectedOwnerYield: p.ProtectedOwnerYield, StealCount: p.StealCount,
+		StolenVisitorPlayerIds: append([]uint64(nil), p.StolenVisitorPlayerIDs...),
+		LastSettledAtMs:        p.LastSettledAtMS,
 	}
 	if p.State == plotv1.PlotState_GROWING || p.State == plotv1.PlotState_MATURE {
 		record.MaturityValue = &datav1.GrowthDecimal9{ScaledValue: p.MaturityValueScaled9}
@@ -546,6 +597,10 @@ func taskMetric(taskID uint32) datav1.TaskMetric {
 		return datav1.TaskMetric_TASK_HARVEST
 	case 5:
 		return datav1.TaskMetric_TASK_SELL_CROP
+	case AddFriendTaskID:
+		return datav1.TaskMetric_TASK_ADD_FRIEND
+	case StealCropTaskID:
+		return datav1.TaskMetric_TASK_STEAL_CROP
 	default:
 		return datav1.TaskMetric_TASK_METRIC_UNSPECIFIED
 	}

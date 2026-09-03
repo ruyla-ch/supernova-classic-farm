@@ -1,7 +1,7 @@
 [CmdletBinding()]
 param(
-    [ValidateSet("dev", "install", "test", "up", "migrate", "down")]
-    [string]$Action = "dev"
+    [ValidateSet("install", "test", "up", "migrate", "down")]
+    [string]$Action = "install"
 )
 
 $ErrorActionPreference = "Stop"
@@ -105,42 +105,10 @@ switch ($Action) {
     }
     "migrate" {
         Start-MySQL
-        & (Join-Path $Root "deploy\migrate.ps1")
+        & (Join-Path $Root "deploy\migrate.ps1") -Mode Docker
     }
     "down" {
         Require-Command "docker"
         Invoke-Checked "docker" (Get-ComposeArguments @("down"))
-    }
-    "dev" {
-        Install-Dependencies
-        Start-MySQL
-        & (Join-Path $Root "deploy\migrate.ps1")
-
-        $processes = @()
-        try {
-            foreach ($service in @("login", "gate", "zone", "coordinator")) {
-                if (Test-Path (Join-Path $ServerDirectory "cmd\$service\main.go")) {
-                    $processes += Start-Process -FilePath "go" `
-                        -ArgumentList @("run", "./cmd/$service") `
-                        -WorkingDirectory $ServerDirectory `
-                        -NoNewWindow `
-                        -PassThru
-                }
-            }
-
-            $npmExecutable = (Get-Command npm).Source
-            $webProcess = Start-Process -FilePath $npmExecutable `
-                -ArgumentList @("run", "dev") `
-                -WorkingDirectory $WebDirectory `
-                -NoNewWindow `
-                -PassThru
-            $processes += $webProcess
-            Wait-Process -Id $webProcess.Id
-        }
-        finally {
-            $processes |
-                Where-Object { $_ -and -not $_.HasExited } |
-                Stop-Process
-        }
     }
 }

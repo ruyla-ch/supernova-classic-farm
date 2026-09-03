@@ -14,6 +14,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/Wriosley/supernova-classic-farm/server/internal/coordinatorclient"
 	"github.com/Wriosley/supernova-classic-farm/server/internal/gateway"
 	"github.com/Wriosley/supernova-classic-farm/server/internal/platform/config"
 	"github.com/Wriosley/supernova-classic-farm/server/internal/platform/health"
@@ -40,32 +41,37 @@ func run() error {
 	if err != nil {
 		return err
 	}
+	ctx, cancel := shutdown.SignalContext(context.Background())
+	defer cancel()
 	client := newInternalHTTPClient()
 	clientConfigURL := envOr("CLIENT_CONFIG_URL", gateway.DefaultConfigURL)
 	configSHA, err := configuredSHA(client, clientConfigURL)
 	if err != nil {
 		return err
 	}
-	routeSource := &gateway.HTTPRouteResolver{
-		Client: client, BaseURL: envOr("COORDINATOR_URL", "http://127.0.0.1:8083"),
-	}
-	routeCache, err := gateway.NewCachedRouteResolver(routeSource, time.Now)
+	coordinatorHTTPClient := newInternalHTTPClient()
+	coordinatorHTTPClient.Timeout = 32 * time.Second
+	routeClient, err := coordinatorclient.New(coordinatorclient.Config{
+		BaseURL: envOr("COORDINATOR_URL", "http://127.0.0.1:8083"),
+		Client:  coordinatorHTTPClient,
+	})
 	if err != nil {
 		return err
 	}
-	warmCtx, warmCancel := context.WithTimeout(context.Background(), 5*time.Second)
-	err = routeCache.Warm(warmCtx)
-	warmCancel()
-	if err != nil {
-		return fmt.Errorf("warm route cache: %w", err)
+	if err = routeClient.Start(ctx); err != nil {
+		return fmt.Errorf("start Coordinator route client: %w", err)
 	}
+	defer routeClient.Close()
 	wsHandler, err := gateway.NewHandler(gateway.Config{
 		Tickets: &gateway.HTTPTicketConsumer{
 			Client: client, Endpoint: envOr("LOGIN_TICKET_CONSUME_URL", "http://127.0.0.1:8080/internal/v1/ws-tickets/consume"),
 			GatewayID: gateway.DefaultGatewayID,
 		},
-		Routes:          routeCache,
-		Zone:            &gateway.HTTPZoneCommander{Client: client},
+		Routes: &gateway.CoordinatorRoutes{Client: routeClient, Now: time.Now},
+		Zone:   &gateway.HTTPZoneCommander{Client: client},
+		Friend: &gateway.HTTPFriendCommander{
+			Client: client, Endpoint: envOr("FRIEND_COMMAND_URL", "http://127.0.0.1:8085/internal/v1/command"),
+		},
 		ClientConfigURL: clientConfigURL,
 		ClientConfigSHA: configSHA,
 	})
@@ -92,8 +98,6 @@ func run() error {
 		"production_backpressure", false,
 		"distributed_connection_revocation", false,
 	)
-	ctx, cancel := shutdown.SignalContext(context.Background())
-	defer cancel()
 	return shutdown.Serve(ctx, server, cfg.ShutdownTimeout, logger)
 }
 

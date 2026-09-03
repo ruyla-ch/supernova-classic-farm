@@ -19,6 +19,8 @@ type PendingRequest = {
 }
 
 export type PlayerStateChangedHandler = (envelope: WsEnvelope) => void
+export type FriendFarmChangedHandler = (envelope: WsEnvelope) => void
+export type DisconnectHandler = () => void
 
 export type AuthenticatedConnection = {
   auth: AuthResponse
@@ -45,6 +47,8 @@ export class FarmWebSocket {
   private socket?: WebSocket
   private pending = new Map<string, PendingRequest>()
   private playerStateChangedHandler?: PlayerStateChangedHandler
+  private friendFarmChangedHandler?: FriendFarmChangedHandler
+  private disconnectHandler?: DisconnectHandler
 
   get connected(): boolean {
     return this.socket?.readyState === WebSocket.OPEN
@@ -52,6 +56,14 @@ export class FarmWebSocket {
 
   setPlayerStateChangedHandler(handler?: PlayerStateChangedHandler): void {
     this.playerStateChangedHandler = handler
+  }
+
+  setFriendFarmChangedHandler(handler?: FriendFarmChangedHandler): void {
+    this.friendFarmChangedHandler = handler
+  }
+
+  setDisconnectHandler(handler?: DisconnectHandler): void {
+    this.disconnectHandler = handler
   }
 
   async connectAndAuth(
@@ -67,7 +79,9 @@ export class FarmWebSocket {
     socket.addEventListener('message', (event) => this.handleMessage(event))
     socket.addEventListener('close', () => {
       if (this.socket === socket) {
+        this.socket = undefined
         this.rejectAll(new Error('WebSocket 已断开'))
+        this.disconnectHandler?.()
       }
     })
     socket.addEventListener('error', () => {
@@ -201,6 +215,22 @@ export class FarmWebSocket {
     })
   }
 
+  async catchPest(
+    playerId: bigint,
+    plotId: number,
+    requestId?: string,
+  ): Promise<WsEnvelope> {
+    return this.sendGameRequest(
+      playerId,
+      Action.CATCH_PEST,
+      {
+        case: 'catchPestRequest',
+        value: { plotId },
+      },
+      requestId,
+    )
+  }
+
   async harvest(playerId: bigint, plotId: number): Promise<WsEnvelope> {
     return this.sendGameRequest(playerId, Action.HARVEST, {
       case: 'harvestRequest',
@@ -253,10 +283,126 @@ export class FarmWebSocket {
     })
   }
 
+  async createFriendCode(playerId: bigint): Promise<WsEnvelope> {
+    return this.sendGameRequest(playerId, Action.CREATE_FRIEND_CODE, {
+      case: 'createFriendCodeRequest',
+      value: {},
+    })
+  }
+
+  async redeemFriendCode(playerId: bigint, code: string): Promise<WsEnvelope> {
+    return this.sendGameRequest(playerId, Action.REDEEM_FRIEND_CODE, {
+      case: 'redeemFriendCodeRequest',
+      value: { code },
+    })
+  }
+
+  async listFriends(playerId: bigint): Promise<WsEnvelope> {
+    return this.sendGameRequest(playerId, Action.LIST_FRIENDS, {
+      case: 'listFriendsRequest',
+      value: {},
+    })
+  }
+
+  async enterFriendFarm(playerId: bigint, ownerPlayerId: bigint): Promise<WsEnvelope> {
+    return this.sendGameRequest(playerId, Action.ENTER_FRIEND_FARM, {
+      case: 'enterFriendFarmRequest',
+      value: { ownerPlayerId },
+    })
+  }
+
+  async heartbeatFriendFarm(
+    playerId: bigint,
+    ownerPlayerId: bigint,
+    visitId: Uint8Array,
+  ): Promise<WsEnvelope> {
+    return this.sendGameRequest(playerId, Action.FARM_HEARTBEAT, {
+      case: 'farmHeartbeatRequest',
+      value: { ownerPlayerId, visitId },
+    })
+  }
+
+  async exitFriendFarm(
+    playerId: bigint,
+    ownerPlayerId: bigint,
+    visitId: Uint8Array,
+  ): Promise<WsEnvelope> {
+    return this.sendGameRequest(playerId, Action.EXIT_FRIEND_FARM, {
+      case: 'exitFriendFarmRequest',
+      value: { ownerPlayerId, visitId },
+    })
+  }
+
+  async applyPestToFriend(
+    playerId: bigint,
+    ownerPlayerId: bigint,
+    visitId: Uint8Array,
+    plotId: number,
+    pestId = 1,
+    requestId?: string,
+  ): Promise<WsEnvelope> {
+    return this.sendGameRequest(
+      playerId,
+      Action.APPLY_PEST_TO_FRIEND,
+      {
+        case: 'applyPestToFriendRequest',
+        value: { ownerPlayerId, visitId, plotId, pestId },
+      },
+      requestId,
+    )
+  }
+
+  async catchPestForFriend(
+    playerId: bigint,
+    ownerPlayerId: bigint,
+    visitId: Uint8Array,
+    plotId: number,
+    requestId?: string,
+  ): Promise<WsEnvelope> {
+    return this.sendGameRequest(
+      playerId,
+      Action.CATCH_PEST_FOR_FRIEND,
+      {
+        case: 'catchPestForFriendRequest',
+        value: { ownerPlayerId, visitId, plotId },
+      },
+      requestId,
+    )
+  }
+
+  async stealFriendCrop(
+    playerId: bigint,
+    ownerPlayerId: bigint,
+    visitId: Uint8Array,
+    plotId: number,
+    expectedCropItemId: number,
+    expectedPlantedAtMs: bigint,
+    expectedStealQuantity: number,
+    requestId?: string,
+  ): Promise<WsEnvelope> {
+    return this.sendGameRequest(
+      playerId,
+      Action.STEAL_FRIEND_CROP,
+      {
+        case: 'stealFriendCropRequest',
+        value: {
+          ownerPlayerId,
+          visitId,
+          plotId,
+          expectedCropItemId,
+          expectedPlantedAtMs,
+          expectedStealQuantity,
+        },
+      },
+      requestId,
+    )
+  }
+
   disconnect(): void {
     const socket = this.socket
     this.socket = undefined
     this.rejectAll(new Error('WebSocket 已主动断开'))
+    this.disconnectHandler?.()
     if (
       socket &&
       (socket.readyState === WebSocket.OPEN ||
@@ -270,6 +416,7 @@ export class FarmWebSocket {
     playerId: bigint,
     action: Action,
     payload: WsEnvelope['payload'],
+    requestId = crypto.randomUUID(),
   ): Promise<WsEnvelope> {
     if (playerId === 0n) {
       return Promise.reject(new Error('authenticated player_id 不能为 0'))
@@ -279,7 +426,7 @@ export class FarmWebSocket {
         protocolVersion: PROTOCOL_VERSION,
         messageKind: MessageKind.REQUEST,
         action,
-        requestId: crypto.randomUUID(),
+        requestId,
         targetPlayerId: playerId,
         payload,
       }),
@@ -339,20 +486,54 @@ export class FarmWebSocket {
     }
     if (envelope.messageKind === MessageKind.PUSH) {
       if (
-        envelope.action !== Action.PLAYER_STATE_CHANGED ||
         envelope.requestId ||
         envelope.targetPlayerId === 0n ||
-        !envelope.stateVersion ||
         envelope.serverTimeMs <= 0n ||
         envelope.error ||
-        envelope.payload.case !== 'playerStateChangedPush' ||
-        !envelope.payload.value.patch
+        envelope.replayed
       ) {
         this.failProtocol('Gateway Push envelope 无效')
         return
       }
-      this.playerStateChangedHandler?.(envelope)
-      return
+      switch (envelope.action) {
+        case Action.PLAYER_STATE_CHANGED:
+          if (
+            !envelope.stateVersion ||
+            envelope.stateVersion.ownerEpoch === 0n ||
+            envelope.payload.case !== 'playerStateChangedPush' ||
+            !envelope.payload.value.patch
+          ) {
+            this.failProtocol('Gateway 玩家状态 Push 无效')
+            return
+          }
+          this.playerStateChangedHandler?.(envelope)
+          return
+        case Action.FRIEND_FARM_CHANGED: {
+          const push =
+            envelope.payload.case === 'friendFarmChangedPush'
+              ? envelope.payload.value
+              : undefined
+          if (
+            envelope.stateVersion ||
+            !push ||
+            push.ownerPlayerId === 0n ||
+            push.ownerPlayerId === envelope.targetPlayerId ||
+            push.visitId.byteLength !== 16 ||
+            !push.ownerStateVersion ||
+            push.ownerStateVersion.ownerEpoch === 0n ||
+            push.plotUpserts.length === 0 ||
+            push.plotUpserts.some((plot) => plot.plotId === 0)
+          ) {
+            this.failProtocol('Gateway 好友农场 Push 无效')
+            return
+          }
+          this.friendFarmChangedHandler?.(envelope)
+          return
+        }
+        default:
+          this.failProtocol('Gateway Push action 无效')
+          return
+      }
     }
     if (envelope.messageKind !== MessageKind.RESPONSE || !envelope.requestId) {
       this.failProtocol('Gateway 响应 envelope 无效')

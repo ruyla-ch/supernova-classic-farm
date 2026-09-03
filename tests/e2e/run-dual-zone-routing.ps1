@@ -1,5 +1,9 @@
 [CmdletBinding()]
-param()
+param(
+    [switch]$FriendSlice,
+    [ValidateRange(0, 57450)]
+    [int]$ServicePortOffset = 0
+)
 
 $ErrorActionPreference = "Stop"
 $ProgressPreference = "SilentlyContinue"
@@ -85,8 +89,28 @@ function Show-Logs {
     }
 }
 
+$loginPort = 8080 + $ServicePortOffset
+$gatePort = 8081 + $ServicePortOffset
+$zoneAPort = 8082 + $ServicePortOffset
+$coordinatorPort = 8083 + $ServicePortOffset
+$zoneBPort = 8084 + $ServicePortOffset
+$friendPort = 8085 + $ServicePortOffset
+$loginURL = "http://127.0.0.1:$loginPort"
+$gateURL = "http://127.0.0.1:$gatePort"
+$zoneAURL = "http://127.0.0.1:$zoneAPort"
+$coordinatorURL = "http://127.0.0.1:$coordinatorPort"
+$zoneBURL = "http://127.0.0.1:$zoneBPort"
+$friendURL = "http://127.0.0.1:$friendPort"
+
 $mysqlMode = -not [string]::IsNullOrWhiteSpace($env:MYSQL_DSN)
-foreach ($port in @(8080, 8081, 8082, 8083, 8084)) {
+$requiredPorts = @($loginPort, $gatePort, $zoneAPort, $coordinatorPort, $zoneBPort)
+if ($FriendSlice) {
+    if (-not $mysqlMode) {
+        throw "-FriendSlice requires MYSQL_DSN"
+    }
+    $requiredPorts += $friendPort
+}
+foreach ($port in $requiredPorts) {
     if (Test-PortOpen $port) {
         throw "required port $port is already in use"
     }
@@ -96,7 +120,9 @@ $failure = $null
 $environmentKeys = @(
     "APP_ENV", "H5_ORIGIN", "GATEWAY_ID", "GATEWAY_URL",
     "CLIENT_CONFIG_URL", "LOGIN_TICKET_CONSUME_URL", "COORDINATOR_URL",
-    "ROUTING_MODE", "E2E_RUN", "E2E_DUAL_ZONE", "E2E_SUITE"
+    "FRIEND_COMMAND_URL", "ROUTING_MODE", "E2E_RUN", "E2E_DUAL_ZONE",
+    "E2E_FRIEND_RUN", "E2E_SUITE", "E2E_LOGIN_URL", "GATE_PUSH_URL",
+    "FRIEND_URL"
 )
 $previousEnvironment = @{}
 foreach ($key in $environmentKeys) {
@@ -105,7 +131,11 @@ foreach ($key in $environmentKeys) {
 
 try {
     $binaries = @{}
-    foreach ($name in @("login", "zone", "coordinator", "gate")) {
+    $servicesToBuild = @("login", "zone", "coordinator", "gate")
+    if ($FriendSlice) {
+        $servicesToBuild += "friend"
+    }
+    foreach ($name in $servicesToBuild) {
         $binary = Join-Path $runRoot "$name.exe"
         Push-Location $serverRoot
         try {
@@ -123,45 +153,65 @@ try {
     $env:APP_ENV = "development"
     $env:H5_ORIGIN = "http://localhost:5173"
     $env:GATEWAY_ID = "local-gateway"
-    $env:GATEWAY_URL = "ws://127.0.0.1:8081/ws"
-    $env:CLIENT_CONFIG_URL = "http://127.0.0.1:8080/v1/client-config/1"
-    $env:LOGIN_TICKET_CONSUME_URL = "http://127.0.0.1:8080/internal/v1/ws-tickets/consume"
-    $env:COORDINATOR_URL = "http://127.0.0.1:8083"
+    $env:GATEWAY_URL = "ws://127.0.0.1:$gatePort/ws"
+    $env:CLIENT_CONFIG_URL = "$loginURL/v1/client-config/1"
+    $env:LOGIN_TICKET_CONSUME_URL = "$loginURL/internal/v1/ws-tickets/consume"
+    $env:COORDINATOR_URL = $coordinatorURL
+    $env:FRIEND_COMMAND_URL = "$friendURL/internal/v1/command"
+    $env:E2E_LOGIN_URL = $loginURL
+    $env:GATE_PUSH_URL = "$gateURL/internal/v1/player-state-changes"
+    $env:FRIEND_URL = $friendURL
     $env:ROUTING_MODE = "static-dual-zone"
     $env:E2E_RUN = "1"
     $env:E2E_DUAL_ZONE = "1"
+    $env:E2E_FRIEND_RUN = if ($FriendSlice) { "1" } else { "" }
     $env:E2E_SUITE = if ($mysqlMode) { "dual-zone-mysql" } else { "dual-zone" }
 
     $coordinator = Start-Service "coordinator" $binaries["coordinator"] @{
+        HTTP_ADDRESS = "127.0.0.1:$coordinatorPort"
         ZONE_A_ID = "zone-a"
-        ZONE_A_ENDPOINT = "http://127.0.0.1:8082"
+        ZONE_A_ENDPOINT = $zoneAURL
         ZONE_B_ID = "zone-b"
-        ZONE_B_ENDPOINT = "http://127.0.0.1:8084"
+        ZONE_B_ENDPOINT = $zoneBURL
         DUAL_ZONE_FENCE_BOOTSTRAP = if ($mysqlMode) { "1" } else { "" }
     }
-    Wait-Ready "coordinator" "http://127.0.0.1:8083/readyz" $coordinator
+    Wait-Ready "coordinator" "$coordinatorURL/readyz" $coordinator
 
-    $login = Start-Service "login" $binaries["login"]
-    Wait-Ready "login" "http://127.0.0.1:8080/readyz" $login
+    $login = Start-Service "login" $binaries["login"] @{
+        HTTP_ADDRESS = "127.0.0.1:$loginPort"
+    }
+    Wait-Ready "login" "$loginURL/readyz" $login
 
     $zoneA = Start-Service "zone-a" $binaries["zone"] @{
         OWNER_ZONE_ID = "zone-a"
-        ZONE_HTTP_ADDRESS = "127.0.0.1:8082"
+        ZONE_HTTP_ADDRESS = "127.0.0.1:$zoneAPort"
     }
-    Wait-Ready "zone-a" "http://127.0.0.1:8082/readyz" $zoneA
+    Wait-Ready "zone-a" "$zoneAURL/readyz" $zoneA
 
     $zoneB = Start-Service "zone-b" $binaries["zone"] @{
         OWNER_ZONE_ID = "zone-b"
-        ZONE_HTTP_ADDRESS = "127.0.0.1:8084"
+        ZONE_HTTP_ADDRESS = "127.0.0.1:$zoneBPort"
     }
-    Wait-Ready "zone-b" "http://127.0.0.1:8084/readyz" $zoneB
+    Wait-Ready "zone-b" "$zoneBURL/readyz" $zoneB
 
-    $gate = Start-Service "gate" $binaries["gate"]
-    Wait-Ready "gate" "http://127.0.0.1:8081/readyz" $gate
+    if ($FriendSlice) {
+        $friend = Start-Service "friend" $binaries["friend"] @{
+            HTTP_ADDRESS = "127.0.0.1:$friendPort"
+        }
+        Wait-Ready "friend" "$friendURL/readyz" $friend
+    }
+
+    $gate = Start-Service "gate" $binaries["gate"] @{
+        HTTP_ADDRESS = "127.0.0.1:$gatePort"
+    }
+    Wait-Ready "gate" "$gateURL/readyz" $gate
 
     Push-Location $serverRoot
     try {
-        $testName = if ($mysqlMode) {
+        $testName = if ($FriendSlice) {
+            "TestMySQLFriendSlice"
+        }
+        elseif ($mysqlMode) {
             "TestDualZoneMySQLRoutingAndPersistence"
         }
         else {
@@ -172,7 +222,7 @@ try {
             throw "dual-Zone E2E failed"
         }
 
-        if ($mysqlMode) {
+        if ($mysqlMode -and -not $FriendSlice) {
             Write-Host "RESTART service=coordinator reason=fence-hydrate-recovery"
             Stop-Process -Id $coordinator.Id -Force -ErrorAction SilentlyContinue
             $coordinator.WaitForExit(10000) | Out-Null
@@ -184,13 +234,14 @@ try {
                 }
             }
             $coordinator = Start-Service "coordinator" $binaries["coordinator"] @{
+                HTTP_ADDRESS = "127.0.0.1:$coordinatorPort"
                 ZONE_A_ID = "zone-a"
-                ZONE_A_ENDPOINT = "http://127.0.0.1:8082"
+                ZONE_A_ENDPOINT = $zoneAURL
                 ZONE_B_ID = "zone-b"
-                ZONE_B_ENDPOINT = "http://127.0.0.1:8084"
+                ZONE_B_ENDPOINT = $zoneBURL
                 DUAL_ZONE_FENCE_BOOTSTRAP = "1"
             }
-            Wait-Ready "coordinator" "http://127.0.0.1:8083/readyz" $coordinator
+            Wait-Ready "coordinator" "$coordinatorURL/readyz" $coordinator
             $env:E2E_SUITE = "dual-zone-mysql-hydrate"
             & go test ./test/e2e -run TestDualZoneMySQLCoordinatorHydrateAfterMigration -count=1 -v
             if ($LASTEXITCODE -ne 0) {
@@ -201,7 +252,12 @@ try {
     finally {
         Pop-Location
     }
-    Write-Host "RESULT dual_zone_routing_e2e=PASS"
+    if ($FriendSlice) {
+        Write-Host "RESULT mysql_friend_slice_e2e=PASS"
+    }
+    else {
+        Write-Host "RESULT dual_zone_routing_e2e=PASS"
+    }
 }
 catch {
     $failure = $_

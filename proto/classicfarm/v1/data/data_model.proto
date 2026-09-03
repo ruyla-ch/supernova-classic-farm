@@ -32,6 +32,8 @@ enum TaskMetric {
   TASK_APPLY_FERTILIZER = 3;
   TASK_HARVEST = 4;
   TASK_SELL_CROP = 5;
+  TASK_ADD_FRIEND = 6;
+  TASK_STEAL_CROP = 7;
 }
 
 enum OutboxEventType {
@@ -103,6 +105,11 @@ message PlotStateRecord {
   optional int64 estimated_mature_at_ms = 13;
   optional TimedEffectRecord fertilizer_effect = 14;
   optional TimedEffectRecord pest_effect = 15;
+  uint32 steal_quantity = 16;
+  uint32 max_steal_times = 17;
+  uint32 protected_owner_yield = 18;
+  uint32 steal_count = 19;
+  repeated uint64 stolen_visitor_player_ids = 20;
 }
 
 message TimedEffectRecord {

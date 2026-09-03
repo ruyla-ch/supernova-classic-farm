@@ -9,7 +9,7 @@ import { enumDesc, fileDesc } from "@bufbuild/protobuf/codegenv2";
  * Describes the file classicfarm/v1/ws/reason/state_change_reason.proto.
  */
 export const file_classicfarm_v1_ws_reason_state_change_reason: GenFile = /*@__PURE__*/
-  fileDesc("CjJjbGFzc2ljZmFybS92MS93cy9yZWFzb24vc3RhdGVfY2hhbmdlX3JlYXNvbi5wcm90bxIYY2xhc3NpY2Zhcm0ud3MudjEucmVhc29uKs8BChFTdGF0ZUNoYW5nZVJlYXNvbhIjCh9TVEFURV9DSEFOR0VfUkVBU09OX1VOU1BFQ0lGSUVEEAASDQoJQlVZX1NFRURTEAESCQoFUExBTlQQAhIUChBBUFBMWV9GRVJUSUxJWkVSEAMSCwoHTUFUVVJFRBAEEgsKB0hBUlZFU1QQBRIOCgpDTEVBTl9QTE9UEAYSDQoJU0VMTF9DUk9QEAcSGAoUQ0xBSU1fQ0hBUFRFUl9SRVdBUkQQCBISCg5CVVlfRkVSVElMSVpFUhAJQllaV2dpdGh1Yi5jb20vV3Jpb3NsZXkvc3VwZXJub3ZhLWNsYXNzaWMtZmFybS9zZXJ2ZXIvZ2VuL2NsYXNzaWNmYXJtL3YxL3dzL3JlYXNvbjtyZWFzb252MWIGcHJvdG8z");
+  fileDesc("CjJjbGFzc2ljZmFybS92MS93cy9yZWFzb24vc3RhdGVfY2hhbmdlX3JlYXNvbi5wcm90bxIYY2xhc3NpY2Zhcm0ud3MudjEucmVhc29uKqYCChFTdGF0ZUNoYW5nZVJlYXNvbhIjCh9TVEFURV9DSEFOR0VfUkVBU09OX1VOU1BFQ0lGSUVEEAASDQoJQlVZX1NFRURTEAESCQoFUExBTlQQAhIUChBBUFBMWV9GRVJUSUxJWkVSEAMSCwoHTUFUVVJFRBAEEgsKB0hBUlZFU1QQBRIOCgpDTEVBTl9QTE9UEAYSDQoJU0VMTF9DUk9QEAcSGAoUQ0xBSU1fQ0hBUFRFUl9SRVdBUkQQCBISCg5CVVlfRkVSVElMSVpFUhAJEhAKDEZSSUVORF9TVEVBTBAKEhgKFEFQUExZX1BFU1RfVE9fRlJJRU5EEAsSGQoVQ0FUQ0hfUEVTVF9GT1JfRlJJRU5EEAwSDgoKQ0FUQ0hfUEVTVBANQllaV2dpdGh1Yi5jb20vV3Jpb3NsZXkvc3VwZXJub3ZhLWNsYXNzaWMtZmFybS9zZXJ2ZXIvZ2VuL2NsYXNzaWNmYXJtL3YxL3dzL3JlYXNvbjtyZWFzb252MWIGcHJvdG8z");
 
 /**
  * @generated from enum classicfarm.ws.v1.reason.StateChangeReason
@@ -64,6 +64,26 @@ export enum StateChangeReason {
    * @generated from enum value: BUY_FERTILIZER = 9;
    */
   BUY_FERTILIZER = 9,
+
+  /**
+   * @generated from enum value: FRIEND_STEAL = 10;
+   */
+  FRIEND_STEAL = 10,
+
+  /**
+   * @generated from enum value: APPLY_PEST_TO_FRIEND = 11;
+   */
+  APPLY_PEST_TO_FRIEND = 11,
+
+  /**
+   * @generated from enum value: CATCH_PEST_FOR_FRIEND = 12;
+   */
+  CATCH_PEST_FOR_FRIEND = 12,
+
+  /**
+   * @generated from enum value: CATCH_PEST = 13;
+   */
+  CATCH_PEST = 13,
 }
 
 /**

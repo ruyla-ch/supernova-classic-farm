@@ -1,0 +1,98 @@
+syntax = "proto3";
+
+package classicfarm.zone.v1;
+
+option go_package = "github.com/Wriosley/supernova-classic-farm/server/gen/classicfarm/v1/zone;zonev1";
+
+import "classicfarm/v1/ws/ws.proto";
+
+message CheckMutualFriendRequest {
+  uint64 first_player_id = 1;
+  uint64 second_player_id = 2;
+}
+
+message CheckMutualFriendResponse {
+  bool mutual = 1;
+}
+
+message EnterVisitorRequest {
+  string request_id = 1;
+  uint64 owner_player_id = 2;
+  uint64 visitor_player_id = 3;
+}
+
+message EnterVisitorResponse {
+  bytes visit_id = 1;
+  int64 expires_at_ms = 2;
+  classicfarm.ws.v1.FarmVisitSnapshot snapshot = 3;
+  classicfarm.ws.v1.Error error = 4;
+}
+
+message HeartbeatVisitorRequest {
+  uint64 owner_player_id = 1;
+  uint64 visitor_player_id = 2;
+  bytes visit_id = 3;
+}
+
+message HeartbeatVisitorResponse {
+  int64 expires_at_ms = 1;
+  classicfarm.ws.v1.Error error = 2;
+}
+
+message ExitVisitorRequest {
+  uint64 owner_player_id = 1;
+  uint64 visitor_player_id = 2;
+  bytes visit_id = 3;
+}
+
+message ExitVisitorResponse {
+  classicfarm.ws.v1.Error error = 1;
+}
+
+message ApplyStealRequest {
+  string request_id = 1;
+  uint64 owner_player_id = 2;
+  uint64 visitor_player_id = 3;
+  bytes visit_id = 4;
+  uint32 plot_id = 5;
+  uint32 expected_crop_item_id = 6;
+  int64 expected_planted_at_ms = 7;
+  uint32 expected_steal_quantity = 8;
+}
+
+message ApplyStealResponse {
+  uint32 crop_item_id = 1;
+  uint32 stolen_quantity = 2;
+  classicfarm.ws.v1.PublicPlotView owner_plot = 3;
+  bool replayed = 4;
+  classicfarm.ws.v1.Error error = 5;
+}
+
+message ApplyPestRequest {
+  string request_id = 1;
+  uint64 owner_player_id = 2;
+  uint64 visitor_player_id = 3;
+  bytes visit_id = 4;
+  uint32 plot_id = 5;
+  uint32 pest_id = 6;
+}
+
+message ApplyPestResponse {
+  classicfarm.ws.v1.PublicPlotView owner_plot = 1;
+  bool replayed = 2;
+  classicfarm.ws.v1.Error error = 3;
+}
+
+message CatchPestRequest {
+  string request_id = 1;
+  uint64 owner_player_id = 2;
+  uint64 visitor_player_id = 3;
+  bytes visit_id = 4;
+  uint32 plot_id = 5;
+}
+
+message CatchPestResponse {
+  classicfarm.ws.v1.PublicPlotView owner_plot = 1;
+  bool replayed = 2;
+  classicfarm.ws.v1.Error error = 3;
+}

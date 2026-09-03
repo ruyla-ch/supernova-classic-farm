@@ -91,9 +91,21 @@ HTTP 注册、登录和 WS Ticket 签发属于后续 `http-api.md`。存储格�
 | 205 | `SELL_CROP` |
 | 206 | `CLAIM_CHAPTER_REWARD` |
 | 207 | `BUY_FERTILIZER` |
+| 208 | `CATCH_PEST` |
+| 300 | `CREATE_FRIEND_CODE` |
+| 301 | `REDEEM_FRIEND_CODE` |
+| 302 | `LIST_FRIENDS` |
+| 310 | `ENTER_FRIEND_FARM` |
+| 311 | `FARM_HEARTBEAT` |
+| 312 | `EXIT_FRIEND_FARM` |
+| 320 | `APPLY_PEST_TO_FRIEND` |
+| 321 | `CATCH_PEST_FOR_FRIEND` |
+| 323 | `STEAL_FRIEND_CROP` |
 | 1000 | `PLAYER_STATE_CHANGED` |
+| 1001 | `FRIEND_FARM_CHANGED` |
 
-编号 3–99、102–199、208–999 和 1001–1999 保留给后续兼容扩展。已经删除的编号也必须永久保留，不能复用。
+编号 3–99、102–199、209–299、303–309、313–319、322、
+324–999 和 1002–1999 保留给后续兼容扩展。已经删除的编号也必须永久保留，不能复用。
 
 ## 5. 公共信封
 

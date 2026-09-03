@@ -20,8 +20,14 @@ const (
 	developmentMaturityScaled9           int64  = 100_000_000_000
 	developmentGrowthRateScaled6         int64  = 1_000_000
 	developmentBaseYield                 uint32 = 3
+	developmentStealQuantity             uint32 = 1
+	developmentMaxStealTimes             uint32 = 1
+	developmentProtectedOwnerYield       uint32 = 2
 	developmentFertilizerModifierScaled6 int64  = 500_000
 	developmentFertilizerDurationMS      int64  = 60_000
+	developmentPestID                    uint32 = 1
+	developmentPestModifierScaled6       int64  = -300_000
+	developmentPestDurationMS            int64  = 120_000
 	developmentSellEntryID               uint32 = 5002
 	developmentCropSellUnitPrice         int64  = 5
 	developmentCropSellPriceVersion      uint64 = 9
@@ -42,15 +48,27 @@ type CropConfig struct {
 	SeedItemID            uint32
 	CropID                uint32
 	CropItemID            uint32
+	Name                  string
 	ConfigVersion         uint64
 	MaturityValueScaled9  int64
 	BaseGrowthRateScaled6 int64
 	BaseYield             uint32
+	StealQuantity         uint32
+	MaxStealTimes         uint32
+	ProtectedOwnerYield   uint32
 	Enabled               bool
 }
 
 type FertilizerConfig struct {
 	ItemID          uint32
+	ConfigVersion   uint64
+	ModifierScaled6 int64
+	DurationMS      int64
+	Enabled         bool
+}
+
+type PestConfig struct {
+	PestID          uint32
 	ConfigVersion   uint64
 	ModifierScaled6 int64
 	DurationMS      int64
@@ -103,6 +121,7 @@ type ConfigSnapshot struct {
 	shopEntries map[uint32]ShopEntry
 	cropsBySeed map[uint32]CropConfig
 	fertilizers map[uint32]FertilizerConfig
+	pests       map[uint32]PestConfig
 	sellRules   map[uint32]SellRule
 	chapters    map[uint32]ChapterConfig
 }
@@ -148,6 +167,34 @@ func NewConfigSnapshotWithChapters(
 	sellRules []SellRule,
 	chapters []ChapterConfig,
 ) (*ConfigSnapshot, error) {
+	return newConfigSnapshot(
+		version, entries, crops, fertilizers, nil, sellRules, chapters,
+	)
+}
+
+func NewConfigSnapshotWithPests(
+	version uint64,
+	entries []ShopEntry,
+	crops []CropConfig,
+	fertilizers []FertilizerConfig,
+	pests []PestConfig,
+	sellRules []SellRule,
+	chapters []ChapterConfig,
+) (*ConfigSnapshot, error) {
+	return newConfigSnapshot(
+		version, entries, crops, fertilizers, pests, sellRules, chapters,
+	)
+}
+
+func newConfigSnapshot(
+	version uint64,
+	entries []ShopEntry,
+	crops []CropConfig,
+	fertilizers []FertilizerConfig,
+	pests []PestConfig,
+	sellRules []SellRule,
+	chapters []ChapterConfig,
+) (*ConfigSnapshot, error) {
 	if version == 0 {
 		return nil, errors.New("config version is required")
 	}
@@ -156,6 +203,7 @@ func NewConfigSnapshotWithChapters(
 		shopEntries: make(map[uint32]ShopEntry, len(entries)),
 		cropsBySeed: make(map[uint32]CropConfig, len(crops)),
 		fertilizers: make(map[uint32]FertilizerConfig, len(fertilizers)),
+		pests:       make(map[uint32]PestConfig, len(pests)),
 		sellRules:   make(map[uint32]SellRule, len(sellRules)),
 		chapters:    make(map[uint32]ChapterConfig, len(chapters)),
 	}
@@ -174,13 +222,26 @@ func NewConfigSnapshotWithChapters(
 	for _, crop := range crops {
 		if crop.SeedItemID == 0 || crop.CropID == 0 || crop.CropItemID == 0 ||
 			crop.ConfigVersion == 0 || crop.MaturityValueScaled9 <= 0 ||
-			crop.BaseGrowthRateScaled6 <= 0 || crop.BaseYield == 0 {
+			crop.BaseGrowthRateScaled6 <= 0 || crop.BaseYield == 0 ||
+			!validCropStealConfig(crop) {
 			return nil, errors.New("crop config is invalid")
 		}
 		if _, duplicate := snapshot.cropsBySeed[crop.SeedItemID]; duplicate {
 			return nil, errors.New("crop seed item ID is duplicated")
 		}
 		snapshot.cropsBySeed[crop.SeedItemID] = crop
+	}
+	cropIDs := make(map[uint32]struct{}, len(crops))
+	cropItemIDs := make(map[uint32]struct{}, len(crops))
+	for _, crop := range crops {
+		if _, duplicate := cropIDs[crop.CropID]; duplicate {
+			return nil, errors.New("crop ID is duplicated")
+		}
+		if _, duplicate := cropItemIDs[crop.CropItemID]; duplicate {
+			return nil, errors.New("crop item ID is duplicated")
+		}
+		cropIDs[crop.CropID] = struct{}{}
+		cropItemIDs[crop.CropItemID] = struct{}{}
 	}
 	for _, fertilizer := range fertilizers {
 		if fertilizer.ItemID == 0 || fertilizer.ConfigVersion == 0 ||
@@ -191,6 +252,17 @@ func NewConfigSnapshotWithChapters(
 			return nil, errors.New("fertilizer item ID is duplicated")
 		}
 		snapshot.fertilizers[fertilizer.ItemID] = fertilizer
+	}
+	for _, pest := range pests {
+		if pest.PestID == 0 || pest.ConfigVersion == 0 ||
+			pest.ModifierScaled6 >= 0 || pest.DurationMS <= 0 ||
+			developmentGrowthRateScaled6+pest.ModifierScaled6 <= 0 {
+			return nil, errors.New("pest config is invalid")
+		}
+		if _, duplicate := snapshot.pests[pest.PestID]; duplicate {
+			return nil, errors.New("pest ID is duplicated")
+		}
+		snapshot.pests[pest.PestID] = pest
 	}
 	for _, rule := range sellRules {
 		if rule.ShopEntryID == 0 || rule.ItemID == 0 ||
@@ -254,8 +326,36 @@ func NewConfigSnapshotWithChapters(
 	return snapshot, nil
 }
 
+type developmentCropDef struct {
+	Name             string
+	CropID           uint32
+	SeedItemID       uint32
+	CropItemID       uint32
+	SeedShopEntryID  uint32
+	SellShopEntryID  uint32
+	SeedPrice        int64
+	SeedPriceVersion uint64
+	MaturityScaled9  int64
+	BaseYield        uint32
+}
+
+func developmentExtraCrops() []developmentCropDef {
+	return []developmentCropDef{
+		{Name: "胡萝卜", CropID: 2002, SeedItemID: 1005, CropItemID: 1015, SeedShopEntryID: 5005, SellShopEntryID: 5015, SeedPrice: 3, SeedPriceVersion: 12, MaturityScaled9: 60_000_000_000, BaseYield: 3},
+		{Name: "白萝卜", CropID: 2003, SeedItemID: 1006, CropItemID: 1016, SeedShopEntryID: 5006, SellShopEntryID: 5016, SeedPrice: 3, SeedPriceVersion: 12, MaturityScaled9: 70_000_000_000, BaseYield: 3},
+		{Name: "玉米", CropID: 2004, SeedItemID: 1007, CropItemID: 1017, SeedShopEntryID: 5007, SellShopEntryID: 5017, SeedPrice: 4, SeedPriceVersion: 12, MaturityScaled9: 80_000_000_000, BaseYield: 3},
+		{Name: "番茄", CropID: 2005, SeedItemID: 1008, CropItemID: 1018, SeedShopEntryID: 5008, SellShopEntryID: 5018, SeedPrice: 4, SeedPriceVersion: 12, MaturityScaled9: 90_000_000_000, BaseYield: 4},
+		{Name: "土豆", CropID: 2006, SeedItemID: 1009, CropItemID: 1019, SeedShopEntryID: 5009, SellShopEntryID: 5019, SeedPrice: 4, SeedPriceVersion: 12, MaturityScaled9: 100_000_000_000, BaseYield: 4},
+		{Name: "茄子", CropID: 2007, SeedItemID: 1010, CropItemID: 1020, SeedShopEntryID: 5010, SellShopEntryID: 5020, SeedPrice: 4, SeedPriceVersion: 12, MaturityScaled9: 110_000_000_000, BaseYield: 5},
+		{Name: "草莓", CropID: 2008, SeedItemID: 1011, CropItemID: 1021, SeedShopEntryID: 5011, SellShopEntryID: 5021, SeedPrice: 5, SeedPriceVersion: 12, MaturityScaled9: 120_000_000_000, BaseYield: 4},
+		{Name: "南瓜", CropID: 2009, SeedItemID: 1012, CropItemID: 1022, SeedShopEntryID: 5012, SellShopEntryID: 5022, SeedPrice: 5, SeedPriceVersion: 12, MaturityScaled9: 130_000_000_000, BaseYield: 5},
+		{Name: "西瓜", CropID: 2010, SeedItemID: 1013, CropItemID: 1023, SeedShopEntryID: 5013, SellShopEntryID: 5023, SeedPrice: 5, SeedPriceVersion: 12, MaturityScaled9: 140_000_000_000, BaseYield: 5},
+		{Name: "葡萄", CropID: 2011, SeedItemID: 1014, CropItemID: 1024, SeedShopEntryID: 5014, SellShopEntryID: 5024, SeedPrice: 5, SeedPriceVersion: 12, MaturityScaled9: 150_000_000_000, BaseYield: 6},
+	}
+}
+
 func NewDevelopmentConfigSnapshot() *ConfigSnapshot {
-	snapshot, err := NewConfigSnapshotWithChapters(ServerConfigVersion, []ShopEntry{
+	shopEntries := []ShopEntry{
 		{
 			ShopEntryID:  developmentShopEntryID,
 			ItemID:       developmentSeedItemID,
@@ -270,42 +370,114 @@ func NewDevelopmentConfigSnapshot() *ConfigSnapshot {
 			PriceVersion: developmentFertilizerPriceVersion,
 			Enabled:      true,
 		},
-	}, []CropConfig{{
-		SeedItemID: developmentSeedItemID, CropID: developmentCropID,
+	}
+	crops := []CropConfig{{
+		Name: "演示作物", SeedItemID: developmentSeedItemID, CropID: developmentCropID,
 		CropItemID: developmentCropItemID, ConfigVersion: ServerConfigVersion,
 		MaturityValueScaled9:  developmentMaturityScaled9,
 		BaseGrowthRateScaled6: developmentGrowthRateScaled6,
-		BaseYield:             developmentBaseYield, Enabled: true,
-	}}, []FertilizerConfig{{
-		ItemID: BasicFertilizerID, ConfigVersion: ServerConfigVersion,
-		ModifierScaled6: developmentFertilizerModifierScaled6,
-		DurationMS:      developmentFertilizerDurationMS, Enabled: true,
-	}}, []SellRule{{
+		BaseYield:             developmentBaseYield,
+		StealQuantity:         stealQuantityFromBaseYield(developmentBaseYield),
+		MaxStealTimes:         maxStealTimesFromBaseYield(developmentBaseYield),
+		ProtectedOwnerYield:   protectedOwnerYieldFromBaseYield(developmentBaseYield),
+		Enabled:               true,
+	}}
+	sellRules := []SellRule{{
 		ShopEntryID: developmentSellEntryID, ItemID: developmentCropItemID,
-		UnitPrice:    developmentCropSellUnitPrice,
-		PriceVersion: developmentCropSellPriceVersion, Enabled: true,
-	}}, []ChapterConfig{
-		{
-			ChapterID: InitialChapterID, ConfigVersion: ServerConfigVersion,
-			Tasks: []Task{
-				{ID: 1, Target: 3}, {ID: 2, Target: 1}, {ID: 3, Target: 1},
-				{ID: 4, Target: 1}, {ID: 5, Target: 1},
+		UnitPrice: developmentCropSellUnitPrice, PriceVersion: developmentCropSellPriceVersion,
+		Enabled: true,
+	}}
+	for _, def := range developmentExtraCrops() {
+		shopEntries = append(shopEntries, ShopEntry{
+			ShopEntryID: def.SeedShopEntryID, ItemID: def.SeedItemID,
+			UnitPrice: def.SeedPrice, PriceVersion: def.SeedPriceVersion, Enabled: true,
+		})
+		crops = append(crops, CropConfig{
+			Name: def.Name, SeedItemID: def.SeedItemID, CropID: def.CropID,
+			CropItemID: def.CropItemID, ConfigVersion: ServerConfigVersion,
+			MaturityValueScaled9: def.MaturityScaled9, BaseGrowthRateScaled6: developmentGrowthRateScaled6,
+			BaseYield: def.BaseYield, Enabled: true,
+			StealQuantity:       stealQuantityFromBaseYield(def.BaseYield),
+			MaxStealTimes:       maxStealTimesFromBaseYield(def.BaseYield),
+			ProtectedOwnerYield: protectedOwnerYieldFromBaseYield(def.BaseYield),
+		})
+		sellRules = append(sellRules, SellRule{
+			ShopEntryID: def.SellShopEntryID, ItemID: def.CropItemID,
+			UnitPrice: developmentCropSellUnitPrice, PriceVersion: developmentCropSellPriceVersion,
+			Enabled: true,
+		})
+	}
+	snapshot, err := NewConfigSnapshotWithPests(
+		ServerConfigVersion, shopEntries, crops, []FertilizerConfig{{
+			ItemID: BasicFertilizerID, ConfigVersion: ServerConfigVersion,
+			ModifierScaled6: developmentFertilizerModifierScaled6,
+			DurationMS:      developmentFertilizerDurationMS, Enabled: true,
+		}}, []PestConfig{{
+			PestID: developmentPestID, ConfigVersion: ServerConfigVersion,
+			ModifierScaled6: developmentPestModifierScaled6,
+			DurationMS:      developmentPestDurationMS, Enabled: true,
+		}}, sellRules, []ChapterConfig{
+			{
+				ChapterID: InitialChapterID, ConfigVersion: ServerConfigVersion,
+				Tasks: []Task{
+					{ID: 1, Target: 3}, {ID: 2, Target: 1}, {ID: 3, Target: 1},
+					{ID: 4, Target: 1}, {ID: 5, Target: 1},
+				},
+				RewardCoins: developmentChapterRewardCoins,
+				RewardItems: []RewardItem{
+					{ItemID: BasicFertilizerID, Quantity: 1},
+					{ItemID: developmentNextSeedItemID, Quantity: 3},
+				},
+				NextChapterID: developmentNextChapterID,
 			},
-			RewardCoins: developmentChapterRewardCoins,
-			RewardItems: []RewardItem{
-				{ItemID: BasicFertilizerID, Quantity: 1},
-				{ItemID: developmentNextSeedItemID, Quantity: 3},
+			{
+				ChapterID: developmentNextChapterID, ConfigVersion: ServerConfigVersion,
+				Tasks: []Task{
+					{ID: AddFriendTaskID, Target: 1},
+					{ID: StealCropTaskID, Target: 1},
+				},
 			},
-			NextChapterID: developmentNextChapterID,
-		},
-		{
-			ChapterID: developmentNextChapterID, ConfigVersion: ServerConfigVersion,
-		},
-	})
+		})
 	if err != nil {
 		panic(err)
 	}
 	return snapshot
+}
+
+func validCropStealConfig(crop CropConfig) bool {
+	if crop.StealQuantity == 0 && crop.MaxStealTimes == 0 &&
+		crop.ProtectedOwnerYield == 0 {
+		return true
+	}
+	if crop.StealQuantity == 0 || crop.MaxStealTimes == 0 ||
+		crop.ProtectedOwnerYield == 0 ||
+		crop.ProtectedOwnerYield >= crop.BaseYield {
+		return false
+	}
+	maxStolen := uint64(crop.StealQuantity) * uint64(crop.MaxStealTimes)
+	return maxStolen+uint64(crop.ProtectedOwnerYield) <= uint64(crop.BaseYield)
+}
+
+func protectedOwnerYieldFromBaseYield(baseYield uint32) uint32 {
+	if baseYield == 0 {
+		return 0
+	}
+	return (baseYield + 1) / 2
+}
+
+func maxStealTimesFromBaseYield(baseYield uint32) uint32 {
+	protected := protectedOwnerYieldFromBaseYield(baseYield)
+	if baseYield <= protected {
+		return 0
+	}
+	return baseYield - protected
+}
+
+func stealQuantityFromBaseYield(baseYield uint32) uint32 {
+	if maxStealTimesFromBaseYield(baseYield) == 0 {
+		return 0
+	}
+	return 1
 }
 
 func (c *ConfigSnapshot) Version() uint64 {
@@ -337,6 +509,14 @@ func (c *ConfigSnapshot) Fertilizer(itemID uint32) (FertilizerConfig, bool) {
 	}
 	fertilizer, exists := c.fertilizers[itemID]
 	return fertilizer, exists
+}
+
+func (c *ConfigSnapshot) Pest(pestID uint32) (PestConfig, bool) {
+	if c == nil {
+		return PestConfig{}, false
+	}
+	pest, exists := c.pests[pestID]
+	return pest, exists
 }
 
 func (c *ConfigSnapshot) SellRule(itemID uint32) (SellRule, bool) {
@@ -382,6 +562,46 @@ func (c *ConfigSnapshot) ActiveShopEntries() []*wsv1.ShopEntryView {
 	entries := make([]*wsv1.ShopEntryView, 0, len(ids))
 	for _, id := range ids {
 		entries = append(entries, views[uint32(id)])
+	}
+	return entries
+}
+
+func (c *ConfigSnapshot) ActiveCropCatalog() []*wsv1.CropCatalogEntryView {
+	if c == nil {
+		return nil
+	}
+	crops := make([]CropConfig, 0, len(c.cropsBySeed))
+	for _, crop := range c.cropsBySeed {
+		if crop.Enabled {
+			crops = append(crops, crop)
+		}
+	}
+	sort.Slice(crops, func(i, j int) bool {
+		return crops[i].CropID < crops[j].CropID
+	})
+	entries := make([]*wsv1.CropCatalogEntryView, 0, len(crops))
+	for _, crop := range crops {
+		entry := &wsv1.CropCatalogEntryView{
+			CropId:          crop.CropID,
+			Name:            crop.Name,
+			SeedItemId:      crop.SeedItemID,
+			CropItemId:      crop.CropItemID,
+			MaturitySeconds: uint64(crop.MaturityValueScaled9 / 1_000_000_000),
+			BaseYield:       crop.BaseYield,
+		}
+		for _, shop := range c.shopEntries {
+			if shop.Enabled && shop.ItemID == crop.SeedItemID {
+				entry.SeedUnitPrice = shop.UnitPrice
+				entry.SeedPriceVersion = shop.PriceVersion
+				entry.SeedShopEntryId = shop.ShopEntryID
+				break
+			}
+		}
+		if sell, ok := c.SellRule(crop.CropItemID); ok && sell.Enabled {
+			entry.SellUnitPrice = sell.UnitPrice
+			entry.SellPriceVersion = sell.PriceVersion
+		}
+		entries = append(entries, entry)
 	}
 	return entries
 }

@@ -50,6 +50,75 @@ func (f zoneFunc) Command(ctx context.Context, route Route, caller uint64, body 
 	return f(ctx, route, caller, body)
 }
 
+type friendFunc func(context.Context, uint64, []byte) ([]byte, error)
+
+func (f friendFunc) Command(ctx context.Context, caller uint64, body []byte) ([]byte, error) {
+	return f(ctx, caller, body)
+}
+
+func TestFriendActionRoutesToFriendSvrWithoutZoneLookup(t *testing.T) {
+	handler, err := NewHandler(Config{
+		Tickets: ticketFunc(func(context.Context, string) (uint64, error) { return 42, nil }),
+		Routes: routeFunc(func(context.Context, uint32) (Route, error) {
+			t.Fatal("friend action resolved a Zone route")
+			return Route{}, nil
+		}),
+		Zone: zoneFunc(func(context.Context, Route, uint64, []byte) ([]byte, error) {
+			t.Fatal("friend action reached Zone")
+			return nil, nil
+		}),
+		Friend: friendFunc(func(_ context.Context, caller uint64, body []byte) ([]byte, error) {
+			if caller != 42 {
+				t.Fatalf("caller=%d", caller)
+			}
+			request := &wsv1.WsEnvelope{}
+			if err := proto.Unmarshal(body, request); err != nil {
+				t.Fatal(err)
+			}
+			return proto.Marshal(&wsv1.WsEnvelope{
+				ProtocolVersion: ProtocolVersion, MessageKind: wsv1.MessageKind_RESPONSE,
+				Action: request.Action, RequestId: request.RequestId, TargetPlayerId: caller,
+				ServerTimeMs: time.Now().UnixMilli(),
+				Payload: &wsv1.WsEnvelope_ListFriendsResponse{
+					ListFriendsResponse: &wsv1.ListFriendsResponse{},
+				},
+			})
+		}),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	server := httptest.NewServer(handler)
+	defer server.Close()
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	conn, _, err := websocket.Dial(ctx, "ws"+strings.TrimPrefix(server.URL, "http"), &websocket.DialOptions{
+		HTTPHeader: http.Header{"Origin": []string{"http://localhost:5173"}},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer conn.CloseNow()
+	writeEnvelope(t, conn, &wsv1.WsEnvelope{
+		ProtocolVersion: ProtocolVersion, MessageKind: wsv1.MessageKind_REQUEST,
+		Action: wsv1.Action_AUTH, RequestId: "auth-friend",
+		Payload: &wsv1.WsEnvelope_AuthRequest{AuthRequest: &wsv1.AuthRequest{WsTicket: "ticket"}},
+	})
+	_ = readEnvelope(t, conn)
+	writeEnvelope(t, conn, &wsv1.WsEnvelope{
+		ProtocolVersion: ProtocolVersion, MessageKind: wsv1.MessageKind_REQUEST,
+		Action: wsv1.Action_LIST_FRIENDS, RequestId: "list-friends",
+		TargetPlayerId: 42,
+		Payload: &wsv1.WsEnvelope_ListFriendsRequest{
+			ListFriendsRequest: &wsv1.ListFriendsRequest{},
+		},
+	})
+	response := readEnvelope(t, conn)
+	if response.Action != wsv1.Action_LIST_FRIENDS || response.GetListFriendsResponse() == nil {
+		t.Fatalf("unexpected response: %v", response)
+	}
+}
+
 func TestHTTPTicketConsumerSingleUseAndGatewayIdentity(t *testing.T) {
 	var consumed atomic.Bool
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -222,6 +291,59 @@ func TestSnapshotBuffersPushAndFlushesOnlyNewerVersions(t *testing.T) {
 	if push.GetMessageKind() != wsv1.MessageKind_PUSH ||
 		push.GetStateVersion().GetPlayerSeq() != 2 {
 		t.Fatalf("second envelope = %+v, want push at seq 2", push)
+	}
+}
+
+func TestPushHubRoutesFriendFarmPushOnlyToTargetVisitor(t *testing.T) {
+	hub := newPushHub()
+	target := hub.subscribe(10, nil, context.Background())
+	other := hub.subscribe(11, nil, context.Background())
+	push := friendFarmChangedPush(10)
+	if err := hub.Publish(push); err != nil {
+		t.Fatal(err)
+	}
+	target.mu.Lock()
+	targetCount := len(target.buffer)
+	target.mu.Unlock()
+	other.mu.Lock()
+	otherCount := len(other.buffer)
+	other.mu.Unlock()
+	if targetCount != 1 || otherCount != 0 {
+		t.Fatalf("target/other buffered pushes=%d/%d, want 1/0", targetCount, otherCount)
+	}
+}
+
+func TestFriendFarmPushValidationRejectsMalformedPayloads(t *testing.T) {
+	tests := map[string]func(*wsv1.WsEnvelope){
+		"envelope state version": func(push *wsv1.WsEnvelope) {
+			push.StateVersion = &wsv1.StateVersion{OwnerEpoch: 1}
+		},
+		"wrong payload": func(push *wsv1.WsEnvelope) {
+			push.Payload = &wsv1.WsEnvelope_PlayerStateChangedPush{
+				PlayerStateChangedPush: &wsv1.PlayerStateChangedPush{},
+			}
+		},
+		"short visit id": func(push *wsv1.WsEnvelope) {
+			push.GetFriendFarmChangedPush().VisitId = make([]byte, 15)
+		},
+		"owner targets self": func(push *wsv1.WsEnvelope) {
+			push.GetFriendFarmChangedPush().OwnerPlayerId = push.TargetPlayerId
+		},
+		"missing upserts": func(push *wsv1.WsEnvelope) {
+			push.GetFriendFarmChangedPush().PlotUpserts = nil
+		},
+	}
+	for name, mutate := range tests {
+		t.Run(name, func(t *testing.T) {
+			push := friendFarmChangedPush(10)
+			mutate(push)
+			if err := validatePushEnvelope(push); err == nil {
+				t.Fatal("malformed friend farm push was accepted")
+			}
+		})
+	}
+	if err := validatePushEnvelope(friendFarmChangedPush(10)); err != nil {
+		t.Fatalf("valid friend farm push rejected: %v", err)
 	}
 }
 
@@ -417,6 +539,27 @@ func maturedPush(playerID, playerSeq uint64) *wsv1.WsEnvelope {
 	}
 }
 
+func friendFarmChangedPush(visitorID uint64) *wsv1.WsEnvelope {
+	return &wsv1.WsEnvelope{
+		ProtocolVersion: ProtocolVersion,
+		MessageKind:     wsv1.MessageKind_PUSH,
+		Action:          wsv1.Action_FRIEND_FARM_CHANGED,
+		TargetPlayerId:  visitorID,
+		ServerTimeMs:    time.Now().UnixMilli(),
+		Payload: &wsv1.WsEnvelope_FriendFarmChangedPush{
+			FriendFarmChangedPush: &wsv1.FriendFarmChangedPush{
+				OwnerPlayerId: 20,
+				VisitId:       make([]byte, 16),
+				OwnerStateVersion: &wsv1.StateVersion{
+					OwnerEpoch: 1,
+					PlayerSeq:  7,
+				},
+				PlotUpserts: []*wsv1.PublicPlotView{{PlotId: 1}},
+			},
+		},
+	}
+}
+
 func pingRequest(requestID string, pingID uint64) *wsv1.WsEnvelope {
 	return &wsv1.WsEnvelope{
 		ProtocolVersion: ProtocolVersion, MessageKind: wsv1.MessageKind_REQUEST,
@@ -461,4 +604,40 @@ func decodeEnvelope(t *testing.T, body []byte) *wsv1.WsEnvelope {
 		t.Fatalf("decode envelope: %v", err)
 	}
 	return message
+}
+
+func TestValidatePestRequestTuples(t *testing.T) {
+	visitID := make([]byte, 16)
+	requests := []*wsv1.WsEnvelope{
+		{
+			ProtocolVersion: 1, MessageKind: wsv1.MessageKind_REQUEST,
+			Action: wsv1.Action_CATCH_PEST, RequestId: "request", TargetPlayerId: 10,
+			Payload: &wsv1.WsEnvelope_CatchPestRequest{
+				CatchPestRequest: &wsv1.CatchPestRequest{PlotId: 1},
+			},
+		},
+		{
+			ProtocolVersion: 1, MessageKind: wsv1.MessageKind_REQUEST,
+			Action: wsv1.Action_APPLY_PEST_TO_FRIEND, RequestId: "request", TargetPlayerId: 10,
+			Payload: &wsv1.WsEnvelope_ApplyPestToFriendRequest{
+				ApplyPestToFriendRequest: &wsv1.ApplyPestToFriendRequest{
+					OwnerPlayerId: 20, VisitId: visitID, PlotId: 1, PestId: 1,
+				},
+			},
+		},
+		{
+			ProtocolVersion: 1, MessageKind: wsv1.MessageKind_REQUEST,
+			Action: wsv1.Action_CATCH_PEST_FOR_FRIEND, RequestId: "request", TargetPlayerId: 10,
+			Payload: &wsv1.WsEnvelope_CatchPestForFriendRequest{
+				CatchPestForFriendRequest: &wsv1.CatchPestForFriendRequest{
+					OwnerPlayerId: 20, VisitId: visitID, PlotId: 1,
+				},
+			},
+		},
+	}
+	for _, request := range requests {
+		if err := validateRequestTuple(request); err != nil {
+			t.Fatalf("%s tuple rejected: %v", request.Action, err)
+		}
+	}
 }

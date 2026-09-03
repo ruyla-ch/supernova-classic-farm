@@ -84,10 +84,14 @@ func (r *Runtime) plant(
 		ID: plot.ID, State: plotv1.PlotState_GROWING,
 		CropID: crop.CropID, CropItemID: crop.CropItemID,
 		CropConfigVersion: crop.ConfigVersion, PlantedAtMS: now.UnixMilli(),
-		MaturityValueScaled9:  crop.MaturityValueScaled9,
-		BaseGrowthRateScaled6: crop.BaseGrowthRateScaled6,
-		BaseYield:             crop.BaseYield, SettledGrowthValueScaled9: 0,
-		LastSettledAtMS: now.UnixMilli(), EstimatedMatureAtMS: &estimatedMatureAtMS,
+		MaturityValueScaled9:      crop.MaturityValueScaled9,
+		BaseGrowthRateScaled6:     crop.BaseGrowthRateScaled6,
+		BaseYield:                 crop.BaseYield,
+		StealQuantity:             crop.StealQuantity,
+		MaxStealTimes:             crop.MaxStealTimes,
+		ProtectedOwnerYield:       crop.ProtectedOwnerYield,
+		SettledGrowthValueScaled9: 0,
+		LastSettledAtMS:           now.UnixMilli(), EstimatedMatureAtMS: &estimatedMatureAtMS,
 	}
 	for index := range a.state.Tasks {
 		if a.state.Tasks[index].ID == 2 && a.state.Tasks[index].Current < a.state.Tasks[index].Target {

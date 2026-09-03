@@ -189,8 +189,9 @@ func run() error {
 		Handler:           mux,
 		ReadHeaderTimeout: 5 * time.Second,
 		ReadTimeout:       10 * time.Second,
-		WriteTimeout:      10 * time.Second,
-		IdleTimeout:       60 * time.Second,
+		// Route watches are capped at 30 seconds by the handler.
+		WriteTimeout: 35 * time.Second,
+		IdleTimeout:  60 * time.Second,
 	}
 	logger.Info(
 		"single-node coordinator listening",

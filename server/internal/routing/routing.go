@@ -507,6 +507,13 @@ func (m *Map) Snapshot() Snapshot {
 	}
 }
 
+// MapVersion returns the latest committed map version without copying entries.
+func (m *Map) MapVersion() uint64 {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	return m.mapVersion
+}
+
 func (m *Map) commitEntry(entry RouteEntry) {
 	m.entries[entry.ShardID] = entry
 	m.mapVersion++

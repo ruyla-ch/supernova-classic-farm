@@ -2,6 +2,7 @@ package routing
 
 import (
 	"encoding/json"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"testing"
@@ -141,5 +142,57 @@ func TestRouteHTTPRejectsInvalidShardID(t *testing.T) {
 				t.Fatalf("status = %d, body = %s", response.Code, response.Body.String())
 			}
 		})
+	}
+}
+
+func TestRouteWatchTimesOutAndReturnsAdvancedSnapshot(t *testing.T) {
+	now := time.Now().UTC()
+	routes, err := NewLocalMap(now, time.Minute)
+	if err != nil {
+		t.Fatal(err)
+	}
+	server := httptest.NewServer(NewHTTPHandler(routes, time.Now))
+	defer server.Close()
+
+	timeoutResponse, err := server.Client().Get(
+		server.URL + "/internal/v1/routes/watch?after_map_version=1&timeout_ms=10",
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	timeoutResponse.Body.Close()
+	if timeoutResponse.StatusCode != http.StatusNoContent {
+		t.Fatalf("timeout status = %d", timeoutResponse.StatusCode)
+	}
+
+	result := make(chan Snapshot, 1)
+	errs := make(chan error, 1)
+	go func() {
+		snapshot, updated, watchErr := WatchSnapshot(
+			t.Context(), server.Client(), server.URL, 1, time.Second,
+		)
+		if watchErr != nil {
+			errs <- watchErr
+			return
+		}
+		if !updated {
+			errs <- errors.New("watch timed out before update")
+			return
+		}
+		result <- snapshot
+	}()
+	if _, err := routes.RenewOwnedLeases(DefaultZoneID, time.Now(), time.Minute); err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case err := <-errs:
+		t.Fatal(err)
+	case snapshot := <-result:
+		if snapshot.MapVersion != 2 || len(snapshot.Entries) != int(ShardCount) {
+			t.Fatalf("watch snapshot = version %d entries %d",
+				snapshot.MapVersion, len(snapshot.Entries))
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("watch did not observe map update")
 	}
 }

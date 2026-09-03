@@ -1,11 +1,65 @@
 ---
 status: active
-updated: 2026-08-03
+updated: 2026-09-03
 ---
 
 # Current Handoff
 
 ## Resume here
+
+On branch `feat/mysql-friend-visit-steal`, Friend Slices 0–3 and the trimmed
+dev UI / multi-crop port are implemented. Do not execute this branch's work on
+`main`; `main` remains the midterm single-player / dual-Zone MySQL baseline.
+
+The H5 now has login-first automatic registration, tab-scoped Session recovery,
+logout, and account/shop/tasks/inventory/friends drawers while preserving the
+friend visit heartbeat/exit/steal state machine and manual list refresh.
+`GET_SHOP` exposes 11 crops plus stable buy/sell quotes. New planting rounds
+freeze the yield-derived steal rule; existing rounds retain checkpoint-frozen
+values. New players receive 16 plots, while loading a stored four-plot
+checkpoint performs no backfill. A two-phase dual-Zone MySQL run on isolated
+ports used players 432 and 433, passed friend visit/steal and replay, then
+restarted the complete stack and recovered Owner/Visitor state and relation
+while rejecting the old visit ID. Full Go tests, vet, Protobuf lint/generation,
+H5 typecheck/build, and diff checks pass. Browser behavior at 320 CSS pixels
+remains a manual evidence boundary. See
+`../evidence/2026-09-03-dev-ui-multi-crop-port.md`.
+
+Gate and every Zone now start one shared HTTP Coordinator subscription SDK:
+they synchronously load the committed 4096-entry ShardMap, follow
+`map_version` through capped long polling, and atomically replace immutable
+local caches. Visitor-Zone Owner lookup no longer calls Coordinator per friend
+request. Every plot mutation now captures private Owner and public Visitor
+projections from one Actor version: online Owners receive
+`PLAYER_STATE_CHANGED`, while current visit leases receive
+`FRIEND_FARM_CHANGED`. A dual-Zone MySQL run observed Owner maturity and
+visitor-steal Pushes plus the cross-Zone Visitor farm Push, then passed
+full-stack recovery. See
+`../evidence/2026-09-03-coordinator-watch-visitor-push.md`.
+
+Friend pest gameplay is now implemented and protocol-live-verified. Actions
+`CATCH_PEST=208`, `APPLY_PEST_TO_FRIEND=320`, and
+`CATCH_PEST_FOR_FRIEND=321` are free and mutate only the farm Owner Actor.
+The development authority currently enables `pest_id=1` at `-0.3` growth for
+120 seconds. Apply/catch settle exact elapsed growth before changing the
+effect; the applying Visitor cannot catch their own pest, while the Owner or a
+different authorized mutual friend can. Retained replay produces no duplicate
+mutation or Push. An isolated dual-Zone MySQL run at offset 12000 used Owner
+455 on Zone A and source Visitor 459 on Zone B, exercised a third mutual
+friend and all private/public pest Push checks, then completed the existing
+steal, maturity, and restart-recovery path. See
+`../evidence/2026-09-03-friend-pest-gameplay.md`.
+
+A reachability cleanup removed the superseded Gate `CachedRouteResolver` and
+per-request `HTTPRouteResolver`; Gate now has only the shared Coordinator SDK
+adapter and synchronous `NOT_OWNER` refresh path. Browser generation is
+restricted to the HTTP and WebSocket packages it imports, while internal
+data/event/Zone protocols remain server-side because they are active
+persistence or frozen implementation contracts. The root `README.md` now
+documents Docker and local-MySQL setup, explicit migration modes, fixed local
+ports, complete startup, verification, and common authentication failures.
+The incomplete duplicate `dev.ps1 -Action dev` launcher was removed; the
+authoritative startup path is `start-servers.ps1` plus `npm run dev`.
 
 V3 is the only current production-target strategy. A new AI should read, in order:
 
@@ -25,10 +79,10 @@ Do not resume V1 or V2 as the implementation target. Do not read every ADR as if
 - Player IDs map to 4096 versioned logical shards. Placement may use Rendezvous Hashing and load correction, but only the production Coordinator's majority-committed route grants ownership.
 - GateSvr routes from a local cache of committed `ACTIVE` routes; ordinary commands do not call the Coordinator.
 - The local prototype implements `static-dual-zone` with either in-memory
-  Players or a newly added MySQL epoch-one bootstrap path. Coordinator
-  materializes versioned Rendezvous candidates into 4096 committed routes for
-  `zone-a` and `zone-b`; Gate warms a complete immutable Snapshot and Zones
-  atomically refresh read-only authorization Snapshots.
+  Players or a MySQL epoch-one bootstrap path. Coordinator materializes
+  versioned Rendezvous candidates into 4096 committed routes for `zone-a` and
+  `zone-b`; a shared HTTP long-poll SDK keeps Gate and Zone immutable route
+  snapshots current without Coordinator calls on the ordinary command path.
 - The MySQL bootstrap implementation transactionally aligns only original
   `zone-local/epoch=1/route_version=1` Fence rows to that committed assignment.
   Full Go regression, vet and a live two-Owner MySQL persistence E2E pass.
@@ -62,7 +116,9 @@ Important rules already recorded in the business architecture:
 - Full warehouse makes an ordinary harvest fail atomically; task reward items that do not fit use a mail Outbox fallback.
 - Client-visible configuration is an immutable versioned Protobuf package delivered over HTTP and verified by SHA-256; it never becomes transaction authority.
 - A pending reward-mail Outbox is recorded atomically in Actor state but becomes database-durable only after the asynchronous checkpoint/Outbox transaction commits.
-- Friend interaction and cross-player inventory transfer remain later phases and must not block the single-player slice.
+- Friend visit, direct steal, and free pest interaction are implemented on the
+  friend branch. Broader cross-player inventory transfer remains outside this
+  slice.
 
 ## Current architecture and decision map
 
@@ -160,13 +216,22 @@ Current milestone status:
 - `deploy/migrations/000004_player_outbox.up.sql` adds the relational relay table. A Dirty flush validates pending event payloads and atomically inserts or immutable-compares each `player_outbox` row in the same MySQL transaction as checkpoint CAS. The relay, Mail Service and delivered-event reconciliation are not implemented.
 - Live in-memory and owner-run MySQL four-process flows completed claim at `player_seq=7`, 29 coins, one fertilizer, three next-chapter seeds and chapter two `IN_PROGRESS`. After all four MySQL-backed services stopped, a fresh stack recovered the same `player_id=9` checkpoint, including the `NEED_CLEANUP` plot.
 - `CLEAN_PLOT` is implemented as an idempotent Actor command. It requires `NEED_CLEANUP`, consumes and grants nothing, advances no task, clears every frozen crop/growth/effect field and returns the plot to `EMPTY`. The H5 no longer blocks cleaning until the chapter-one reward is claimed.
-- The development shop now returns three active entries in stable entry-ID order: seed sale (`1001`, 2 coins), crop buyback (`1002`, 5 coins), and basic fertilizer sale (`item_id=1`, 2 coins). `BUY_FERTILIZER` has its own idempotent Actor command, shares the 1–50 quantity and 300-stack rules, and does not advance the seed-purchase task.
+- Friend pest gameplay is implemented through Protobuf actions 208/320/321.
+  Owner catch and visit-authorized friend apply/catch are free, touch no
+  inventory/reward/task state, and serialize only in the farm Owner Actor.
+  `pest_id=1` freezes a `-0.3` modifier for 120 seconds; exact settlement
+  handles fertilizer overlap and effect boundaries. Owner checkpoints retain
+  the PEST effect/source and terminal success/failure receipts. Apply source
+  cannot catch its own pest. Each successful mutation increments the Owner
+  version once and fans the same event to the private Owner and all current
+  public Visitors; replay and deterministic failure produce no duplicate Push.
+- The development shop now returns 23 active entries in stable entry-ID order: 11 seed sales, 11 crop buybacks, and basic fertilizer. `GET_SHOP` also returns an 11-entry crop catalog in stable crop-ID order. `BUY_FERTILIZER` has its own idempotent Actor command, shares the 1–50 quantity and 300-stack rules, and does not advance the seed-purchase task.
 - Live in-memory and owner-run MySQL four-process flows completed the server-side owner loop at `player_seq=8` and replayed cleanup without applying twice. After all four MySQL-backed services stopped, a fresh stack recovered the same `player_id=10`, 29 coins, expected inventory, chapter two and the `EMPTY` plot.
 - A browser-driven in-memory H5 run registered `player_id=1`, bought, planted, fertilized, received one natural maturity Push, harvested, sold, claimed and cleaned through `state_version=1/8`. The final UI showed 29 coins, two old seeds, one fertilizer, three next-chapter seeds, chapter two and an empty plot; gap recovery remained zero. A 320 CSS-pixel viewport check reported no horizontal overflow.
-- New development Player state and registration checkpoints now contain four stable `EMPTY` plots (`plot_id=1..4`). Commands still patch only their requested plot; snapshot and checkpoint ordering remain stable. Existing development checkpoints are not migrated online and must be reset/re-registered locally.
+- New development Player state and registration checkpoints now contain 16 stable `EMPTY` plots (`plot_id=1..16`). Commands still patch only their requested plot; snapshot and checkpoint ordering remain stable. Existing four-plot checkpoints are loaded unchanged and are not backfilled.
 - A browser-driven four-plot run used plot 2 for plant, fertilizer, natural maturity Push, harvest and cleanup while plots 1/3/4 remained empty. It also exercised an explicit one-crop sale followed by `sell_all`, verified the 1/50 purchase boundaries and tool cursor URL, completed at 29 coins with all four plots empty, and reported no horizontal overflow at 320 CSS pixels.
 - An owner-run MySQL 8.4 two-stack E2E registered `player_id=11`, completed the command loop to `player_seq=8`, stopped all four services, then recovered the same checkpoint from fresh processes. The updated snapshot assertions validated four ordered plots and kept plots 2–4 `EMPTY`.
-- `start-servers.ps1 -DualZone` starts Coordinator, Login, Zone A on 8082,
+- `start-servers.ps1` starts the default dual-Zone stack: Coordinator, Login, Zone A on 8082,
   Zone B on 8084 and Gate in dependency order. With `MYSQL_DSN`, Coordinator
   requires explicit bootstrap authorization and aligns all Fences before Login
   accepts registrations.
@@ -244,13 +309,17 @@ Without `MYSQL_DSN`, the runnable code deliberately uses development-only in-mem
 
 - LoginSvr stores accounts, Argon2id password hashes, Sessions, CSRF records and one-time tickets in process-local Go maps. Registration allocates a sequential `player_id`; restarting LoginSvr loses all of these records.
 - Registration does not yet create a durable Player checkpoint and does not call Zone.
-- ZoneSvr stores one lazily created Player Actor per `player_id` in a process-local map. The first player command creates the development state with 10 coins, one basic fertilizer, four empty plots and chapter-one tasks.
+- ZoneSvr stores one lazily created Player Actor per `player_id` in a process-local map. The first player command creates the development state with 10 coins, one basic fertilizer, 16 empty plots and chapter-one tasks.
 - `GET_PLAYER_SNAPSHOT` is routed by Gate through its locally cached committed
   Route, executes on the selected Zone's Player Actor mailbox and projects the
   snapshot from current Actor memory. The default mode still uses one local
   Zone; `static-dual-zone` uses two independent Actor runtimes, backed either
   by process memory alone or by assigned-Fence MySQL checkpoints.
 - Gate keeps authenticated player subscriptions in process memory. Online maturity travels from Zone to Gate over loopback HTTP and is forwarded as a Protobuf Push; reconnect or any detected version gap uses a fresh snapshot rather than replaying Push history.
+- Owner Zones keep process-local visit leases and asynchronously fan immutable
+  public plot changes to current Visitors as `FRIEND_FARM_CHANGED`. The H5
+  validates Owner plus visit identity and orders this independent stream by
+  Owner state version.
 - `GET_SHOP` is routed to Zone and reads the pinned global configuration snapshot without activating a Player Actor.
 - Coordinator route state is also process-local. Without `MYSQL_DSN`, Dirty
   writeback, database Fences and restart recovery are not implemented.
@@ -270,7 +339,9 @@ With `MYSQL_DSN`, the new code path:
 - stores only the Session digest, not the raw cookie value;
 - validates the deterministic checkpoint blob, SHA-256 and relational envelope before activating a Zone Actor;
 - fails Actor activation instead of silently creating default state when a configured checkpoint load fails;
-- executes `BUY_SEEDS`, `PLANT`, `APPLY_FERTILIZER`, `HARVEST`, `SELL_CROP`, `CLAIM_CHAPTER_REWARD` and `CLEAN_PLOT` inside the Player Actor mailbox, retains their idempotency results and marks the aggregate Dirty;
+- executes owner-loop commands plus `CATCH_PEST` and the Owner side of
+  `APPLY_PEST_TO_FRIEND`/`CATCH_PEST_FOR_FRIEND` inside the Player Actor
+  mailbox, retains their idempotency results and marks the aggregate Dirty;
 - asynchronously writes the whole checkpoint under exact process-Zone and
   epoch Fence validation plus checkpoint-revision CAS, including atomic
   relational Outbox creation when a reward overflows inventory.
@@ -293,7 +364,7 @@ The static bootstrap is deliberately mode-specific: after `zone-local` Fences
 are converted to Zone A/B, that database must not be reused for local
 single-Zone MySQL writes without a separately designed safe conversion.
 
-The auth DDL and local values `AUTO_INCREMENT player_id`, `db_shard_id = 0`, initial `checkpoint_revision = 1`, `owner_epoch = 1`, four empty plots, seed quote `(shop_entry_id=5001, item_id=1001, unit_price=2, price_version=8)`, crop `(crop_id=2001, crop_item_id=1002, maturity=100, rate=1, base_yield=3)`, and fertilizer `(item_id=1, modifier=+0.5, duration=60s)` are proposed implementation conventions, not accepted contract decisions.
+The auth DDL and local values `AUTO_INCREMENT player_id`, `db_shard_id = 0`, initial `checkpoint_revision = 1`, `owner_epoch = 1`, 16 empty plots for new players, the 11-crop development catalog and shop quotes, and fertilizer `(item_id=1, modifier=+0.5, duration=60s)` are proposed implementation conventions, not accepted contract decisions.
 
 ## Product code and evidence state
 
@@ -338,6 +409,11 @@ The auth DDL and local values `AUTO_INCREMENT player_id`, `db_shard_id = 0`, ini
   and post-migration Coordinator Fence hydration after restart.
 - `../evidence/2026-08-03-ws-ticket-restart-boundary.md` and ADR-0010 freeze
   unused WS tickets/CSRF as process-local across Login restart.
+- `../evidence/2026-09-03-friend-pest-gameplay.md` records exact pest
+  configuration/growth tests and a live dual-Zone MySQL run with Owner,
+  applying Visitor, third-friend catch, all-current-visitor Push fanout,
+  idempotent replay, source rejection, existing steal/maturity behavior, and
+  fresh-stack recovery.
 - Automated browser behavior in MySQL mode, distributed/retriable Push delivery, abnormal Dirty-window loss, availability and performance remain unverified.
 - A loopback-only local test platform exists under `tests/catalog.json` and
   `server/cmd/testrunner`. It wraps existing Go/PowerShell checks with tiered
@@ -345,8 +421,21 @@ The auth DDL and local values `AUTO_INCREMENT player_id`, `db_shard_id = 0`, ini
 
 ## Next actions
 
-The full remaining-phase map and iteration table live in
-`../plans/2026-08-03-remaining-roadmap-and-iterations.md`. Immediate P0 order:
+On `feat/mysql-friend-visit-steal` only:
+
+1. Run one browser smoke at 320 CSS px covering login/automatic registration,
+   Session reload, five drawers, 4/16-plot rendering, crop selection, manual
+   friend refresh, friend visit/steal/pest controls and artwork, Owner
+   apply/catch Pushes, all-current-visitor pest visibility, Owner maturity
+   Push, and visible Visitor farm updates without manual re-entry.
+2. Add a live chapter-two account path for task ID 7, or keep the unit-only
+   boundary explicit for the demonstration.
+3. Keep compendium, mail delivery/UI, pets, Tcaplus, gRPC HMAC, and
+   FriendInteraction Saga outside this branch.
+
+On `main` (midterm baseline), the remaining-phase map remains
+`../plans/2026-08-03-remaining-roadmap-and-iterations.md`. Immediate P0 order
+there:
 
 1. Run one owner browser flow against MySQL to combine the H5 interaction proof
    with durable restart recovery (roadmap R2).

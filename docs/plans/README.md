@@ -13,6 +13,24 @@ Plans describe intended work. `docs/context/CURRENT.md` describes the actual cur
 
 ## Current state
 
+`2026-09-03-mysql-friend-visit-steal-plan.md` 是 **已完成** 的计划：在
+`feat/mysql-friend-visit-steal` 上用 MySQL + 双 Zone 做加好友、进入农场和
+直调偷菜。`main` 仍是中期基线，不执行该计划。 Slice 0 已完成；Slice 1
+的 cross-Zone MySQL 双账号主路径和 MySQL 服务重启恢复已通过。Slice 2–3
+的 HTTP/Protobuf 访问、直调偷菜、Visitor 背包提交和 H5 页面已实现；live
+跨 Zone 主路径和 post-steal 完整服务重启恢复均已通过。
+
+`2026-09-03-mysql-http-friend-visit-direct-steal-review.md` 是 Slice 2/3 的
+实施前审核稿：以 `origin/dev-perf-loadtest-20260820` 为主要参考，只保留
+访问租约、公开投影、冻结可偷参数与 Visitor→Owner 直调业务规则，明确改写为
+当前分支的 MySQL + loopback HTTP + Dirty checkpoint，不带入 Tcaplus、gRPC
+或 Saga。
+
+`2026-09-03-mysql-http-protobuf-friend-visit-steal-tasks.md` 是上述审核稿的
+可执行开发任务清单。它把工作拆成 T01–T18，明确 WebSocket 和内部 HTTP 都
+使用 Protobuf message、但不声明 gRPC Service；文末八项边界已确认，T01–T18
+均已完成。浏览器 320px 手工证据仍是后续验证边界。
+
 `2026-08-03-remaining-roadmap-and-iterations.md` 是面向 2026-08-21 答辩的
 中文后续路线图与迭代表。用它排期；每一轮大改前再单独写有边界的执行计划。
 

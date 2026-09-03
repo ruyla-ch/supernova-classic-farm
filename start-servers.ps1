@@ -3,9 +3,13 @@ param(
     [ValidateRange(0, 86400)]
     [int]$RunSeconds = 0,
 
-    [string]$MySQLDSN = $env:MYSQL_DSN,
+    [string]$MySQLDSN = "",
 
-    [switch]$DualZone
+    # Dual Zone is the default. Pass -SingleZone for the four-process local Owner.
+    [switch]$SingleZone,
+
+    # Default is MySQL spliced from repo-root .env. Pass -InMemory for maps.
+    [switch]$InMemory
 )
 
 $ErrorActionPreference = "Stop"
@@ -109,9 +113,24 @@ if (-not (Get-Command go -ErrorAction SilentlyContinue)) {
     throw "Go was not found on PATH"
 }
 
+$DualZone = -not $SingleZone.IsPresent
+
+if ($InMemory.IsPresent) {
+    $MySQLDSN = ""
+}
+elseif ([string]::IsNullOrWhiteSpace($MySQLDSN)) {
+    . (Join-Path $repoRoot "tests\e2e\_mysql-env.ps1")
+    $mysql = Resolve-MySQLConnection -IgnoreProcessDSN
+    $MySQLDSN = $mysql.Dsn
+    Write-Host "[config] MySQL DSN from $($mysql.Source) ($($mysql.User)@$($mysql.HostName):$($mysql.Port)/$($mysql.Database))"
+}
+
 $ports = @(8080, 8081, 8082, 8083)
 if ($DualZone) {
     $ports += 8084
+}
+if (-not [string]::IsNullOrWhiteSpace($MySQLDSN)) {
+    $ports += 8085
 }
 foreach ($port in $ports) {
     if (Test-PortOpen -Port $port) {
@@ -126,7 +145,7 @@ New-Item -ItemType Directory -Path $runRoot | Out-Null
 $environmentKeys = @(
     "APP_ENV", "H5_ORIGIN", "GATEWAY_ID", "GATEWAY_URL",
     "CLIENT_CONFIG_URL", "LOGIN_TICKET_CONSUME_URL", "COORDINATOR_URL",
-    "MYSQL_DSN", "ROUTING_MODE"
+    "FRIEND_COMMAND_URL", "MYSQL_DSN", "ROUTING_MODE"
 )
 $previousEnvironment = @{}
 foreach ($key in $environmentKeys) {
@@ -134,22 +153,45 @@ foreach ($key in $environmentKeys) {
 }
 
 try {
+    $serviceNamesToBuild = @("login", "zone", "coordinator", "gate", "friend")
     $binaries = @{}
-    foreach ($name in @("login", "zone", "coordinator", "gate")) {
-        $binary = Join-Path $runRoot "$name.exe"
-        Write-Host "[build] $name"
-        Push-Location $serverRoot
-        try {
-            & go build -o $binary "./cmd/$name"
-            if ($LASTEXITCODE -ne 0) {
-                throw "go build failed for $name"
-            }
-        }
-        finally {
-            Pop-Location
-        }
-        $binaries[$name] = $binary
+    foreach ($name in $serviceNamesToBuild) {
+        $binaries[$name] = Join-Path $runRoot "$name.exe"
     }
+
+    Write-Host "[build] compiling $($serviceNamesToBuild -join ', ') in parallel"
+    Write-Host "[build] first compile can take several minutes while Go downloads modules"
+    $buildStarted = Get-Date
+    $buildJobs = @()
+    foreach ($name in $serviceNamesToBuild) {
+        $job = Start-Job -ScriptBlock {
+            param($Root, $ServiceName, $Binary)
+            Set-Location $Root
+            & go build -o $Binary "./cmd/$ServiceName" 2>&1
+            if ($LASTEXITCODE -ne 0) {
+                throw "go build failed for $ServiceName with exit $LASTEXITCODE"
+            }
+        } -ArgumentList $serverRoot, $name, $binaries[$name]
+        $buildJobs += [pscustomobject]@{
+            Name = $name
+            Job  = $job
+        }
+    }
+    foreach ($item in $buildJobs) {
+        $item.Job | Wait-Job | Out-Null
+        $output = $item.Job | Receive-Job -ErrorAction SilentlyContinue
+        if ($item.Job.State -ne "Completed") {
+            if ($output) {
+                $output | Write-Host
+            }
+            $reason = $item.Job.ChildJobs[0].JobStateInfo.Reason
+            throw "go build failed for $($item.Name): $reason"
+        }
+        Write-Host "[build] $($item.Name) ok"
+    }
+    $buildJobs | ForEach-Object { Remove-Job -Job $_.Job -Force }
+    $elapsed = [int]((Get-Date) - $buildStarted).TotalSeconds
+    Write-Host "[build] all binaries ready in ${elapsed}s"
 
     $env:APP_ENV = "development"
     $env:H5_ORIGIN = "http://localhost:5173"
@@ -158,6 +200,7 @@ try {
     $env:CLIENT_CONFIG_URL = "http://127.0.0.1:8080/v1/client-config/1"
     $env:LOGIN_TICKET_CONSUME_URL = "http://127.0.0.1:8080/internal/v1/ws-tickets/consume"
     $env:COORDINATOR_URL = "http://127.0.0.1:8083"
+    $env:FRIEND_COMMAND_URL = "http://127.0.0.1:8085/internal/v1/command"
     $env:MYSQL_DSN = $MySQLDSN
     $env:ROUTING_MODE = if ($DualZone) { "static-dual-zone" } else { "local" }
 
@@ -180,6 +223,11 @@ try {
     $login = Start-FarmService -Name "login" -Binary $binaries["login"]
     Wait-Ready -Name "LoginSvr" -Url "http://127.0.0.1:8080/readyz" -Process $login
     Wait-Ready -Name "Client config" -Url "http://127.0.0.1:8080/v1/client-config/1" -Process $login
+
+    if (-not [string]::IsNullOrWhiteSpace($MySQLDSN)) {
+        $friend = Start-FarmService -Name "friend" -Binary $binaries["friend"]
+        Wait-Ready -Name "FriendSvr" -Url "http://127.0.0.1:8085/readyz" -Process $friend
+    }
 
     if ($DualZone) {
         $zoneA = Start-FarmService -Name "zone-a" -Binary $binaries["zone"] -Environment @{
@@ -213,9 +261,13 @@ try {
         Write-Host "ZoneSvr:    http://127.0.0.1:8082"
     }
     Write-Host "Coordinator:http://127.0.0.1:8083"
+    if (-not [string]::IsNullOrWhiteSpace($MySQLDSN)) {
+        Write-Host "FriendSvr:  http://127.0.0.1:8085"
+    }
     Write-Host ""
     if ([string]::IsNullOrWhiteSpace($MySQLDSN)) {
         Write-Host "Data mode: development-only in-memory. Press Ctrl+C to stop all services."
+        Write-Host "Friend actions are unavailable without MYSQL_DSN."
     }
     else {
         Write-Host "Data mode: MySQL accounts, Sessions, and Player checkpoints. Press Ctrl+C to stop all services."

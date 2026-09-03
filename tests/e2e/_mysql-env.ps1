@@ -41,13 +41,14 @@ function Read-DotEnvFile {
 
 function Resolve-MySQLConnection {
     param(
-        [string]$HostName = "127.0.0.1",
-        [ValidateRange(1, 65535)]
-        [int]$Port = 3306,
-        [string]$Database = "classicfarm",
-        [string]$User = "classicfarm",
-        [switch]$AllowPrompt
-    )
+    [string]$HostName = "127.0.0.1",
+    [ValidateRange(1, 65535)]
+    [int]$Port = 3306,
+    [string]$Database = "classicfarm",
+    [string]$User = "classicfarm",
+    [switch]$AllowPrompt,
+    [switch]$IgnoreProcessDSN
+)
 
     $dotenv = Read-DotEnvFile -Path (Join-Path (Get-RepoRootFromScript) ".env")
 
@@ -90,7 +91,7 @@ function Resolve-MySQLConnection {
         }
     }
 
-    if (-not [string]::IsNullOrWhiteSpace($env:MYSQL_DSN)) {
+    if (-not $IgnoreProcessDSN.IsPresent -and -not [string]::IsNullOrWhiteSpace($env:MYSQL_DSN)) {
         return [pscustomobject]@{
             Dsn           = $env:MYSQL_DSN
             PlainPassword = $plainPassword

@@ -1,6 +1,9 @@
 package player
 
-import "testing"
+import (
+	"reflect"
+	"testing"
+)
 
 func TestConfigSnapshotRejectsInvalidAndDuplicateShopEntries(t *testing.T) {
 	tests := []struct {
@@ -72,19 +75,77 @@ func TestConfigSnapshotRejectsInvalidAndDuplicateSellRules(t *testing.T) {
 	}
 }
 
-func TestDevelopmentShopIncludesSeedCropAndFertilizerQuotesInStableOrder(t *testing.T) {
-	entries := NewDevelopmentConfigSnapshot().ActiveShopEntries()
-	if len(entries) != 3 ||
-		entries[0].GetShopEntryId() != developmentShopEntryID ||
-		entries[1].GetShopEntryId() != developmentSellEntryID ||
-		entries[1].GetItemId() != developmentCropItemID ||
-		entries[1].GetUnitPrice() != developmentCropSellUnitPrice ||
-		entries[1].GetPriceVersion() != developmentCropSellPriceVersion ||
-		entries[2].GetShopEntryId() != developmentFertilizerShopEntryID ||
-		entries[2].GetItemId() != BasicFertilizerID ||
-		entries[2].GetUnitPrice() != developmentFertilizerUnitPrice ||
-		entries[2].GetPriceVersion() != developmentFertilizerPriceVersion {
-		t.Fatalf("development shop entries = %+v", entries)
+func TestDevelopmentCropCatalogAndShopHaveExactStableOrdering(t *testing.T) {
+	config := NewDevelopmentConfigSnapshot()
+	catalog := config.ActiveCropCatalog()
+	if len(catalog) != 11 {
+		t.Fatalf("crop catalog length = %d, want 11", len(catalog))
+	}
+	wantNames := []string{
+		"演示作物", "胡萝卜", "白萝卜", "玉米", "番茄", "土豆",
+		"茄子", "草莓", "南瓜", "西瓜", "葡萄",
+	}
+	wantMaturitySeconds := []uint64{100, 60, 70, 80, 90, 100, 110, 120, 130, 140, 150}
+	wantBaseYields := []uint32{3, 3, 3, 3, 4, 4, 5, 4, 5, 5, 6}
+	wantSeedPrices := []int64{2, 3, 3, 4, 4, 4, 4, 5, 5, 5, 5}
+	for index, crop := range catalog {
+		wantCropID := uint32(2001 + index)
+		wantSeedItemID := uint32(1001)
+		wantCropItemID := uint32(1002)
+		wantSeedShopEntryID := uint32(5001)
+		wantSeedPriceVersion := uint64(8)
+		if index > 0 {
+			wantSeedItemID = uint32(1004 + index)
+			wantCropItemID = uint32(1014 + index)
+			wantSeedShopEntryID = uint32(5004 + index)
+			wantSeedPriceVersion = 12
+		}
+		if crop.GetCropId() != wantCropID ||
+			crop.GetName() != wantNames[index] ||
+			crop.GetSeedItemId() != wantSeedItemID ||
+			crop.GetCropItemId() != wantCropItemID ||
+			crop.GetMaturitySeconds() != wantMaturitySeconds[index] ||
+			crop.GetBaseYield() != wantBaseYields[index] ||
+			crop.GetSeedUnitPrice() != wantSeedPrices[index] ||
+			crop.GetSeedPriceVersion() != wantSeedPriceVersion ||
+			crop.GetSeedShopEntryId() != wantSeedShopEntryID ||
+			crop.GetSellUnitPrice() != developmentCropSellUnitPrice ||
+			crop.GetSellPriceVersion() != developmentCropSellPriceVersion {
+			t.Fatalf("crop catalog entry %d = %+v", index, crop)
+		}
+	}
+
+	entries := config.ActiveShopEntries()
+	gotEntryIDs := make([]uint32, len(entries))
+	for index, entry := range entries {
+		gotEntryIDs[index] = entry.GetShopEntryId()
+	}
+	wantEntryIDs := []uint32{
+		5001, 5002, 5003,
+		5005, 5006, 5007, 5008, 5009, 5010, 5011, 5012, 5013, 5014,
+		5015, 5016, 5017, 5018, 5019, 5020, 5021, 5022, 5023, 5024,
+	}
+	if !reflect.DeepEqual(gotEntryIDs, wantEntryIDs) {
+		t.Fatalf("shop entry IDs = %v, want %v", gotEntryIDs, wantEntryIDs)
+	}
+}
+
+func TestDevelopmentCropStealValuesAreDerivedFromBaseYield(t *testing.T) {
+	config := NewDevelopmentConfigSnapshot()
+	for _, view := range config.ActiveCropCatalog() {
+		crop, exists := config.CropForSeed(view.GetSeedItemId())
+		if !exists {
+			t.Fatalf("crop %d missing by seed", view.GetCropId())
+		}
+		wantProtected := (crop.BaseYield + 1) / 2
+		wantMaxStealTimes := crop.BaseYield - wantProtected
+		if crop.StealQuantity != 1 ||
+			crop.ProtectedOwnerYield != wantProtected ||
+			crop.MaxStealTimes != wantMaxStealTimes {
+			t.Fatalf("crop %d steal values = (%d,%d,%d), want (1,%d,%d)",
+				crop.CropID, crop.StealQuantity, crop.ProtectedOwnerYield,
+				crop.MaxStealTimes, wantProtected, wantMaxStealTimes)
+		}
 	}
 }
 

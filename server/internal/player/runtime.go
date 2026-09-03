@@ -13,8 +13,10 @@ import (
 
 	datav1 "github.com/Wriosley/supernova-classic-farm/server/gen/classicfarm/v1/data"
 	wsv1 "github.com/Wriosley/supernova-classic-farm/server/gen/classicfarm/v1/ws"
+	reasonv1 "github.com/Wriosley/supernova-classic-farm/server/gen/classicfarm/v1/ws/reason"
 	"github.com/Wriosley/supernova-classic-farm/server/internal/actor"
 	"github.com/Wriosley/supernova-classic-farm/server/internal/routing"
+	"google.golang.org/protobuf/proto"
 )
 
 const (
@@ -59,6 +61,7 @@ type Runtime struct {
 	loader        CheckpointLoader
 	writer        CheckpointWriter
 	pushForwarder PushForwarder
+	farmForwarder FarmChangeForwarder
 	config        atomic.Pointer[ConfigSnapshot]
 	now           func() time.Time
 	backgroundCtx context.Context
@@ -129,11 +132,22 @@ func (r *Runtime) materializeOnlineMaturities(ctx context.Context) error {
 			continue
 		}
 		var events []MaturityEvent
+		var farmEvent *FarmChangeEvent
 		var revision uint64
 		var maturityErr error
 		if err := a.mailbox.Do(ctx, func() {
 			events, maturityErr = a.state.materializeDueMaturities(r.now())
 			revision = a.state.CheckpointRevision
+			if len(events) > 0 {
+				plotIDs := make(map[uint32]struct{}, len(events))
+				for _, event := range events {
+					plotIDs[event.Plot.GetPlotId()] = struct{}{}
+				}
+				farmEvent = captureFarmChange(
+					a.state, r.now(), reasonv1.StateChangeReason_MATURED, "",
+					plotIDs, plotIDs,
+				)
+			}
 		}); err != nil {
 			r.shardLocks[shardID].RUnlock()
 			return fmt.Errorf("schedule maturity for player %d: %w", playerID, err)
@@ -144,6 +158,7 @@ func (r *Runtime) materializeOnlineMaturities(ctx context.Context) error {
 		}
 		if len(events) > 0 {
 			r.markDirty(playerID, revision)
+			r.forwardFarmChange(farmEvent)
 			if err := r.forwardMaturityEvents(ctx, events); err != nil {
 				r.shardLocks[shardID].RUnlock()
 				return err
@@ -168,6 +183,16 @@ func (r *Runtime) SetPushForwarder(forwarder PushForwarder) error {
 	}
 	r.mu.Lock()
 	r.pushForwarder = forwarder
+	r.mu.Unlock()
+	return nil
+}
+
+func (r *Runtime) SetFarmChangeForwarder(forwarder FarmChangeForwarder) error {
+	if forwarder == nil {
+		return errors.New("farm change forwarder is required")
+	}
+	r.mu.Lock()
+	r.farmForwarder = forwarder
 	r.mu.Unlock()
 	return nil
 }
@@ -298,10 +323,6 @@ func (r *Runtime) actorFor(
 		state.CheckpointRevision++
 		state.UpdatedAtMS = r.now().UTC().UnixMilli()
 	}
-	_, err := state.materializeDueMaturities(r.now())
-	if err != nil {
-		return nil, fmt.Errorf("activate player maturity: %w", err)
-	}
 	created := &runtimeActor{
 		mailbox:           actor.NewMailbox(64),
 		state:             state,
@@ -359,6 +380,8 @@ func (r *Runtime) Handle(ctx context.Context, callerPlayerID, ownerEpoch uint64,
 		request.GetPlantRequest() != nil
 	isApplyFertilizer := request.Action == wsv1.Action_APPLY_FERTILIZER &&
 		request.GetApplyFertilizerRequest() != nil
+	isCatchPest := request.Action == wsv1.Action_CATCH_PEST &&
+		request.GetCatchPestRequest() != nil
 	isHarvest := request.Action == wsv1.Action_HARVEST &&
 		request.GetHarvestRequest() != nil
 	isCleanPlot := request.Action == wsv1.Action_CLEAN_PLOT &&
@@ -368,7 +391,7 @@ func (r *Runtime) Handle(ctx context.Context, callerPlayerID, ownerEpoch uint64,
 	isClaimReward := request.Action == wsv1.Action_CLAIM_CHAPTER_REWARD &&
 		request.GetClaimChapterRewardRequest() != nil
 	if !isSnapshot && !isGetShop && !isBuySeeds && !isBuyFertilizer && !isPlant &&
-		!isApplyFertilizer && !isHarvest && !isCleanPlot &&
+		!isApplyFertilizer && !isCatchPest && !isHarvest && !isCleanPlot &&
 		!isSellCrop && !isClaimReward {
 		return nil, ErrUnsupportedAction
 	}
@@ -384,6 +407,7 @@ func (r *Runtime) Handle(ctx context.Context, callerPlayerID, ownerEpoch uint64,
 				GetShopResponse: &wsv1.GetShopResponse{
 					ServerConfigVersion: config.Version(),
 					Entries:             config.ActiveShopEntries(),
+					Crops:               config.ActiveCropCatalog(),
 				},
 			},
 		}, nil
@@ -398,7 +422,23 @@ func (r *Runtime) Handle(ctx context.Context, callerPlayerID, ownerEpoch uint64,
 	var dirtyRevision uint64
 	var executionErr error
 	var maturityEvents []MaturityEvent
+	var farmEvent *FarmChangeEvent
 	err = a.mailbox.Do(ctx, func() {
+		publicChangedPlotIDs := make(map[uint32]struct{})
+		maturityPlotIDs := make(map[uint32]struct{})
+		mutationPlotIDs := make(map[uint32]struct{})
+		eventReason := reasonv1.StateChangeReason_STATE_CHANGE_REASON_UNSPECIFIED
+		causedByRequestID := ""
+		defer func() {
+			ownerPlotIDs := maturityPlotIDs
+			if len(mutationPlotIDs) > 0 {
+				ownerPlotIDs = mutationPlotIDs
+			}
+			farmEvent = captureFarmChange(
+				a.state, serverNow, eventReason, causedByRequestID,
+				ownerPlotIDs, publicChangedPlotIDs,
+			)
+		}()
 		var maturityErr error
 		maturityEvents, maturityErr = a.state.materializeDueMaturities(serverNow)
 		if maturityErr != nil {
@@ -408,6 +448,12 @@ func (r *Runtime) Handle(ctx context.Context, callerPlayerID, ownerEpoch uint64,
 		if len(maturityEvents) > 0 {
 			dirty = true
 			dirtyRevision = a.state.CheckpointRevision
+			eventReason = reasonv1.StateChangeReason_MATURED
+			for _, event := range maturityEvents {
+				plotID := event.Plot.GetPlotId()
+				maturityPlotIDs[plotID] = struct{}{}
+				publicChangedPlotIDs[plotID] = struct{}{}
+			}
 		}
 		if isBuySeeds {
 			var commandDirty bool
@@ -428,6 +474,13 @@ func (r *Runtime) Handle(ctx context.Context, callerPlayerID, ownerEpoch uint64,
 			response, commandDirty = r.plant(a, callerPlayerID, request, config, serverNow)
 			dirty = dirty || commandDirty
 			dirtyRevision = a.state.CheckpointRevision
+			if addSuccessfulMutationPlot(
+				publicChangedPlotIDs, mutationPlotIDs,
+				request.GetPlantRequest().GetPlotId(), response,
+			) {
+				eventReason = reasonv1.StateChangeReason_PLANT
+				causedByRequestID = request.RequestId
+			}
 			return
 		}
 		if isApplyFertilizer {
@@ -435,6 +488,27 @@ func (r *Runtime) Handle(ctx context.Context, callerPlayerID, ownerEpoch uint64,
 			response, commandDirty = r.applyFertilizer(a, callerPlayerID, request, config, serverNow)
 			dirty = dirty || commandDirty
 			dirtyRevision = a.state.CheckpointRevision
+			if addSuccessfulMutationPlot(
+				publicChangedPlotIDs, mutationPlotIDs,
+				request.GetApplyFertilizerRequest().GetPlotId(), response,
+			) {
+				eventReason = reasonv1.StateChangeReason_APPLY_FERTILIZER
+				causedByRequestID = request.RequestId
+			}
+			return
+		}
+		if isCatchPest {
+			var commandDirty bool
+			response, commandDirty = r.catchPest(a, callerPlayerID, request, config, serverNow)
+			dirty = dirty || commandDirty
+			dirtyRevision = a.state.CheckpointRevision
+			if addSuccessfulMutationPlot(
+				publicChangedPlotIDs, mutationPlotIDs,
+				request.GetCatchPestRequest().GetPlotId(), response,
+			) {
+				eventReason = reasonv1.StateChangeReason_CATCH_PEST
+				causedByRequestID = request.RequestId
+			}
 			return
 		}
 		if isHarvest {
@@ -442,6 +516,13 @@ func (r *Runtime) Handle(ctx context.Context, callerPlayerID, ownerEpoch uint64,
 			response, commandDirty = r.harvest(a, callerPlayerID, request, config, serverNow)
 			dirty = dirty || commandDirty
 			dirtyRevision = a.state.CheckpointRevision
+			if addSuccessfulMutationPlot(
+				publicChangedPlotIDs, mutationPlotIDs,
+				request.GetHarvestRequest().GetPlotId(), response,
+			) {
+				eventReason = reasonv1.StateChangeReason_HARVEST
+				causedByRequestID = request.RequestId
+			}
 			return
 		}
 		if isCleanPlot {
@@ -451,6 +532,13 @@ func (r *Runtime) Handle(ctx context.Context, callerPlayerID, ownerEpoch uint64,
 			)
 			dirty = dirty || commandDirty
 			dirtyRevision = a.state.CheckpointRevision
+			if addSuccessfulMutationPlot(
+				publicChangedPlotIDs, mutationPlotIDs,
+				request.GetCleanPlotRequest().GetPlotId(), response,
+			) {
+				eventReason = reasonv1.StateChangeReason_CLEAN_PLOT
+				causedByRequestID = request.RequestId
+			}
 			return
 		}
 		if isSellCrop {
@@ -501,6 +589,7 @@ func (r *Runtime) Handle(ctx context.Context, callerPlayerID, ownerEpoch uint64,
 	if !isSnapshot && len(maturityEvents) > 0 {
 		_ = r.forwardMaturityEvents(ctx, maturityEvents)
 	}
+	r.forwardFarmChange(farmEvent)
 	return response, nil
 }
 
@@ -715,6 +804,87 @@ func (r *Runtime) forwardMaturityEvents(ctx context.Context, events []MaturityEv
 		}
 	}
 	return nil
+}
+
+func addSuccessfulMutationPlot(
+	publicPlotIDs map[uint32]struct{},
+	ownerPlotIDs map[uint32]struct{},
+	plotID uint32,
+	response *wsv1.WsEnvelope,
+) bool {
+	if plotID != 0 && response != nil && response.Error == nil && !response.Replayed {
+		publicPlotIDs[plotID] = struct{}{}
+		ownerPlotIDs[plotID] = struct{}{}
+		return true
+	}
+	return false
+}
+
+func captureFarmChange(
+	state *State,
+	now time.Time,
+	reason reasonv1.StateChangeReason,
+	causedByRequestID string,
+	ownerPlotIDs map[uint32]struct{},
+	publicPlotIDs map[uint32]struct{},
+) *FarmChangeEvent {
+	if state == nil || len(publicPlotIDs) == 0 ||
+		reason == reasonv1.StateChangeReason_STATE_CHANGE_REASON_UNSPECIFIED {
+		return nil
+	}
+	publicIDs := make([]uint32, 0, len(publicPlotIDs))
+	for plotID := range publicPlotIDs {
+		publicIDs = append(publicIDs, plotID)
+	}
+	sort.Slice(publicIDs, func(i, j int) bool { return publicIDs[i] < publicIDs[j] })
+	ownerIDs := make([]uint32, 0, len(ownerPlotIDs))
+	for plotID := range ownerPlotIDs {
+		ownerIDs = append(ownerIDs, plotID)
+	}
+	sort.Slice(ownerIDs, func(i, j int) bool { return ownerIDs[i] < ownerIDs[j] })
+	event := &FarmChangeEvent{
+		OwnerPlayerID:     state.PlayerID,
+		OwnerEpoch:        state.OwnerEpoch,
+		OwnerPlayerSeq:    state.PlayerSeq,
+		ServerTimeMS:      now.UnixMilli(),
+		Reason:            reason,
+		CausedByRequestID: causedByRequestID,
+		OwnerPlotUpserts:  make([]*wsv1.PlotView, 0, len(ownerIDs)),
+		PublicPlotUpserts: make([]*wsv1.PublicPlotView, 0, len(publicIDs)),
+	}
+	for _, plotID := range ownerIDs {
+		if plot := state.Plots[plotID]; plot != nil {
+			event.OwnerPlotUpserts = append(
+				event.OwnerPlotUpserts,
+				proto.Clone(plot.View()).(*wsv1.PlotView),
+			)
+		}
+	}
+	for _, plotID := range publicIDs {
+		if plot := state.Plots[plotID]; plot != nil {
+			view := publicPlotView(plot)
+			event.PublicPlotUpserts = append(
+				event.PublicPlotUpserts,
+				proto.Clone(view).(*wsv1.PublicPlotView),
+			)
+		}
+	}
+	if len(event.PublicPlotUpserts) == 0 {
+		return nil
+	}
+	return event
+}
+
+func (r *Runtime) forwardFarmChange(event *FarmChangeEvent) {
+	if event == nil {
+		return
+	}
+	r.mu.Lock()
+	forwarder := r.farmForwarder
+	r.mu.Unlock()
+	if forwarder != nil {
+		forwarder.ForwardFarmChange(*event)
+	}
 }
 
 func (r *Runtime) Close() {

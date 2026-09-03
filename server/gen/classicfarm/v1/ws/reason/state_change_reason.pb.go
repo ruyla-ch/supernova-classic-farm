@@ -34,21 +34,29 @@ const (
 	StateChangeReason_SELL_CROP                       StateChangeReason = 7
 	StateChangeReason_CLAIM_CHAPTER_REWARD            StateChangeReason = 8
 	StateChangeReason_BUY_FERTILIZER                  StateChangeReason = 9
+	StateChangeReason_FRIEND_STEAL                    StateChangeReason = 10
+	StateChangeReason_APPLY_PEST_TO_FRIEND            StateChangeReason = 11
+	StateChangeReason_CATCH_PEST_FOR_FRIEND           StateChangeReason = 12
+	StateChangeReason_CATCH_PEST                      StateChangeReason = 13
 )
 
 // Enum value maps for StateChangeReason.
 var (
 	StateChangeReason_name = map[int32]string{
-		0: "STATE_CHANGE_REASON_UNSPECIFIED",
-		1: "BUY_SEEDS",
-		2: "PLANT",
-		3: "APPLY_FERTILIZER",
-		4: "MATURED",
-		5: "HARVEST",
-		6: "CLEAN_PLOT",
-		7: "SELL_CROP",
-		8: "CLAIM_CHAPTER_REWARD",
-		9: "BUY_FERTILIZER",
+		0:  "STATE_CHANGE_REASON_UNSPECIFIED",
+		1:  "BUY_SEEDS",
+		2:  "PLANT",
+		3:  "APPLY_FERTILIZER",
+		4:  "MATURED",
+		5:  "HARVEST",
+		6:  "CLEAN_PLOT",
+		7:  "SELL_CROP",
+		8:  "CLAIM_CHAPTER_REWARD",
+		9:  "BUY_FERTILIZER",
+		10: "FRIEND_STEAL",
+		11: "APPLY_PEST_TO_FRIEND",
+		12: "CATCH_PEST_FOR_FRIEND",
+		13: "CATCH_PEST",
 	}
 	StateChangeReason_value = map[string]int32{
 		"STATE_CHANGE_REASON_UNSPECIFIED": 0,
@@ -61,6 +69,10 @@ var (
 		"SELL_CROP":                       7,
 		"CLAIM_CHAPTER_REWARD":            8,
 		"BUY_FERTILIZER":                  9,
+		"FRIEND_STEAL":                    10,
+		"APPLY_PEST_TO_FRIEND":            11,
+		"CATCH_PEST_FOR_FRIEND":           12,
+		"CATCH_PEST":                      13,
 	}
 )
 
@@ -95,7 +107,7 @@ var File_classicfarm_v1_ws_reason_state_change_reason_proto protoreflect.FileDes
 
 const file_classicfarm_v1_ws_reason_state_change_reason_proto_rawDesc = "" +
 	"\n" +
-	"2classicfarm/v1/ws/reason/state_change_reason.proto\x12\x18classicfarm.ws.v1.reason*\xcf\x01\n" +
+	"2classicfarm/v1/ws/reason/state_change_reason.proto\x12\x18classicfarm.ws.v1.reason*\xa6\x02\n" +
 	"\x11StateChangeReason\x12#\n" +
 	"\x1fSTATE_CHANGE_REASON_UNSPECIFIED\x10\x00\x12\r\n" +
 	"\tBUY_SEEDS\x10\x01\x12\t\n" +
@@ -107,7 +119,13 @@ const file_classicfarm_v1_ws_reason_state_change_reason_proto_rawDesc = "" +
 	"CLEAN_PLOT\x10\x06\x12\r\n" +
 	"\tSELL_CROP\x10\a\x12\x18\n" +
 	"\x14CLAIM_CHAPTER_REWARD\x10\b\x12\x12\n" +
-	"\x0eBUY_FERTILIZER\x10\tBYZWgithub.com/Wriosley/supernova-classic-farm/server/gen/classicfarm/v1/ws/reason;reasonv1b\x06proto3"
+	"\x0eBUY_FERTILIZER\x10\t\x12\x10\n" +
+	"\fFRIEND_STEAL\x10\n" +
+	"\x12\x18\n" +
+	"\x14APPLY_PEST_TO_FRIEND\x10\v\x12\x19\n" +
+	"\x15CATCH_PEST_FOR_FRIEND\x10\f\x12\x0e\n" +
+	"\n" +
+	"CATCH_PEST\x10\rBYZWgithub.com/Wriosley/supernova-classic-farm/server/gen/classicfarm/v1/ws/reason;reasonv1b\x06proto3"
 
 var (
 	file_classicfarm_v1_ws_reason_state_change_reason_proto_rawDescOnce sync.Once

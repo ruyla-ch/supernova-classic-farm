@@ -48,14 +48,24 @@ type RouteResolver interface {
 	Resolve(context.Context, uint32) (Route, error)
 }
 
+// RouteRefresher synchronously replaces a stale complete route snapshot.
+type RouteRefresher interface {
+	Refresh(context.Context) error
+}
+
 type ZoneCommander interface {
 	Command(context.Context, Route, uint64, []byte) ([]byte, error)
+}
+
+type FriendCommander interface {
+	Command(context.Context, uint64, []byte) ([]byte, error)
 }
 
 type Config struct {
 	Tickets           TicketConsumer
 	Routes            RouteResolver
 	Zone              ZoneCommander
+	Friend            FriendCommander
 	AuthTimeout       time.Duration
 	CommandTimeout    time.Duration
 	HeartbeatInterval time.Duration
@@ -68,6 +78,7 @@ type Handler struct {
 	tickets           TicketConsumer
 	routes            RouteResolver
 	zone              ZoneCommander
+	friend            FriendCommander
 	authTimeout       time.Duration
 	commandTimeout    time.Duration
 	heartbeatInterval time.Duration
@@ -114,6 +125,7 @@ func NewHandler(cfg Config) (*Handler, error) {
 	}
 	return &Handler{
 		tickets: cfg.Tickets, routes: cfg.Routes, zone: cfg.Zone,
+		friend:      cfg.Friend,
 		authTimeout: cfg.AuthTimeout, commandTimeout: cfg.CommandTimeout,
 		heartbeatInterval: cfg.HeartbeatInterval,
 		clientConfigURL:   cfg.ClientConfigURL,
@@ -320,6 +332,11 @@ func validateRequestTuple(request *wsv1.WsEnvelope) error {
 		if request.TargetPlayerId == 0 || request.GetApplyFertilizerRequest() == nil {
 			return errors.New("invalid fertilizer request")
 		}
+	case wsv1.Action_CATCH_PEST:
+		payload := request.GetCatchPestRequest()
+		if request.TargetPlayerId == 0 || payload == nil || payload.PlotId == 0 {
+			return errors.New("invalid catch pest request")
+		}
 	case wsv1.Action_HARVEST:
 		if request.TargetPlayerId == 0 || request.GetHarvestRequest() == nil {
 			return errors.New("invalid harvest request")
@@ -335,6 +352,62 @@ func validateRequestTuple(request *wsv1.WsEnvelope) error {
 	case wsv1.Action_CLAIM_CHAPTER_REWARD:
 		if request.TargetPlayerId == 0 || request.GetClaimChapterRewardRequest() == nil {
 			return errors.New("invalid claim request")
+		}
+	case wsv1.Action_CREATE_FRIEND_CODE:
+		if request.TargetPlayerId == 0 || request.GetCreateFriendCodeRequest() == nil {
+			return errors.New("invalid create friend code request")
+		}
+	case wsv1.Action_REDEEM_FRIEND_CODE:
+		if request.TargetPlayerId == 0 || request.GetRedeemFriendCodeRequest() == nil ||
+			request.GetRedeemFriendCodeRequest().GetCode() == "" {
+			return errors.New("invalid redeem friend code request")
+		}
+	case wsv1.Action_LIST_FRIENDS:
+		if request.TargetPlayerId == 0 || request.GetListFriendsRequest() == nil {
+			return errors.New("invalid list friends request")
+		}
+	case wsv1.Action_ENTER_FRIEND_FARM:
+		payload := request.GetEnterFriendFarmRequest()
+		if request.TargetPlayerId == 0 || payload == nil ||
+			payload.OwnerPlayerId == 0 || payload.OwnerPlayerId == request.TargetPlayerId {
+			return errors.New("invalid enter friend farm request")
+		}
+	case wsv1.Action_FARM_HEARTBEAT:
+		payload := request.GetFarmHeartbeatRequest()
+		if request.TargetPlayerId == 0 || payload == nil ||
+			payload.OwnerPlayerId == 0 || len(payload.VisitId) != 16 {
+			return errors.New("invalid farm heartbeat request")
+		}
+	case wsv1.Action_EXIT_FRIEND_FARM:
+		payload := request.GetExitFriendFarmRequest()
+		if request.TargetPlayerId == 0 || payload == nil ||
+			payload.OwnerPlayerId == 0 || len(payload.VisitId) != 16 {
+			return errors.New("invalid exit friend farm request")
+		}
+	case wsv1.Action_APPLY_PEST_TO_FRIEND:
+		payload := request.GetApplyPestToFriendRequest()
+		if request.TargetPlayerId == 0 || payload == nil ||
+			payload.OwnerPlayerId == 0 || payload.OwnerPlayerId == request.TargetPlayerId ||
+			len(payload.VisitId) != 16 || payload.PlotId == 0 || payload.PestId == 0 {
+			return errors.New("invalid apply pest request")
+		}
+	case wsv1.Action_CATCH_PEST_FOR_FRIEND:
+		payload := request.GetCatchPestForFriendRequest()
+		if request.TargetPlayerId == 0 || payload == nil ||
+			payload.OwnerPlayerId == 0 || payload.OwnerPlayerId == request.TargetPlayerId ||
+			len(payload.VisitId) != 16 || payload.PlotId == 0 {
+			return errors.New("invalid catch pest for friend request")
+		}
+	case wsv1.Action_STEAL_FRIEND_CROP:
+		payload := request.GetStealFriendCropRequest()
+		if request.TargetPlayerId == 0 || payload == nil ||
+			payload.OwnerPlayerId == 0 ||
+			payload.OwnerPlayerId == request.TargetPlayerId ||
+			len(payload.VisitId) != 16 || payload.PlotId == 0 ||
+			payload.ExpectedCropItemId == 0 ||
+			payload.ExpectedPlantedAtMs <= 0 ||
+			payload.ExpectedStealQuantity == 0 {
+			return errors.New("invalid steal friend crop request")
 		}
 	default:
 		return errUnknownAction
@@ -383,6 +456,23 @@ func (h *Handler) handleGame(
 	}
 	ctx, cancel := context.WithTimeout(parent, h.commandTimeout)
 	defer cancel()
+	if isFriendAction(request.Action) {
+		if h.friend == nil {
+			_ = writer.write(parent, marshalResponse(errorResponse(request, wsv1.ErrorCode_SERVICE_UNAVAILABLE, true, h.now)))
+			return
+		}
+		response, err := h.friend.Command(ctx, caller, raw)
+		if err == nil && validateFriendResponse(response, request) == nil {
+			_ = writer.write(parent, response)
+			return
+		}
+		code := wsv1.ErrorCode_SERVICE_UNAVAILABLE
+		if errors.Is(err, context.DeadlineExceeded) {
+			code = wsv1.ErrorCode_REQUEST_OUTCOME_UNKNOWN
+		}
+		_ = writer.write(parent, marshalResponse(errorResponse(request, code, true, h.now)))
+		return
+	}
 	isSnapshot := request.Action == wsv1.Action_GET_PLAYER_SNAPSHOT
 	if isSnapshot {
 		subscription.beginSnapshot()
@@ -400,12 +490,16 @@ func (h *Handler) handleGame(
 			failureSource = "zone_command_" + zoneFailure.kind
 		}
 		if errors.Is(err, ErrNotOwner) {
-			if invalidator, ok := h.routes.(RouteInvalidator); ok {
-				invalidator.InvalidateIfVersion(shardID, route.RouteVersion)
+			if refresher, ok := h.routes.(RouteRefresher); ok {
+				err = refresher.Refresh(ctx)
+			} else {
+				err = nil
 			}
-			route, err = h.routes.Resolve(ctx, shardID)
 			if err == nil {
-				response, err = h.zone.Command(ctx, route, caller, raw)
+				route, err = h.routes.Resolve(ctx, shardID)
+				if err == nil {
+					response, err = h.zone.Command(ctx, route, caller, raw)
+				}
 			}
 		}
 		if err == nil {
@@ -440,6 +534,19 @@ func (h *Handler) handleGame(
 		code = wsv1.ErrorCode_REQUEST_OUTCOME_UNKNOWN
 	}
 	_ = writer.write(parent, marshalResponse(errorResponse(request, code, true, h.now)))
+}
+
+func isFriendAction(action wsv1.Action) bool {
+	switch action {
+	case wsv1.Action_CREATE_FRIEND_CODE, wsv1.Action_REDEEM_FRIEND_CODE, wsv1.Action_LIST_FRIENDS:
+		return true
+	default:
+		return false
+	}
+}
+
+func validateFriendResponse(body []byte, request *wsv1.WsEnvelope) error {
+	return validateZoneResponse(body, request)
 }
 
 func validateZoneResponse(body []byte, request *wsv1.WsEnvelope) error {

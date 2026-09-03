@@ -186,6 +186,8 @@ const (
 	TaskMetric_TASK_APPLY_FERTILIZER   TaskMetric = 3
 	TaskMetric_TASK_HARVEST            TaskMetric = 4
 	TaskMetric_TASK_SELL_CROP          TaskMetric = 5
+	TaskMetric_TASK_ADD_FRIEND         TaskMetric = 6
+	TaskMetric_TASK_STEAL_CROP         TaskMetric = 7
 )
 
 // Enum value maps for TaskMetric.
@@ -197,6 +199,8 @@ var (
 		3: "TASK_APPLY_FERTILIZER",
 		4: "TASK_HARVEST",
 		5: "TASK_SELL_CROP",
+		6: "TASK_ADD_FRIEND",
+		7: "TASK_STEAL_CROP",
 	}
 	TaskMetric_value = map[string]int32{
 		"TASK_METRIC_UNSPECIFIED": 0,
@@ -205,6 +209,8 @@ var (
 		"TASK_APPLY_FERTILIZER":   3,
 		"TASK_HARVEST":            4,
 		"TASK_SELL_CROP":          5,
+		"TASK_ADD_FRIEND":         6,
+		"TASK_STEAL_CROP":         7,
 	}
 )
 
@@ -691,24 +697,29 @@ func (x *InventoryStack) GetQuantity() uint32 {
 }
 
 type PlotStateRecord struct {
-	state               protoimpl.MessageState `protogen:"open.v1"`
-	PlotId              uint32                 `protobuf:"varint,1,opt,name=plot_id,json=plotId,proto3" json:"plot_id,omitempty"`
-	State               PlotRecordState        `protobuf:"varint,2,opt,name=state,proto3,enum=classicfarm.data.v1.PlotRecordState" json:"state,omitempty"`
-	CropId              uint32                 `protobuf:"varint,3,opt,name=crop_id,json=cropId,proto3" json:"crop_id,omitempty"`
-	CropItemId          uint32                 `protobuf:"varint,4,opt,name=crop_item_id,json=cropItemId,proto3" json:"crop_item_id,omitempty"`
-	CropConfigVersion   uint64                 `protobuf:"varint,5,opt,name=crop_config_version,json=cropConfigVersion,proto3" json:"crop_config_version,omitempty"`
-	PlantedAtMs         int64                  `protobuf:"varint,6,opt,name=planted_at_ms,json=plantedAtMs,proto3" json:"planted_at_ms,omitempty"`
-	MaturityValue       *GrowthDecimal9        `protobuf:"bytes,7,opt,name=maturity_value,json=maturityValue,proto3" json:"maturity_value,omitempty"`
-	BaseGrowthRate      *RateDecimal6          `protobuf:"bytes,8,opt,name=base_growth_rate,json=baseGrowthRate,proto3" json:"base_growth_rate,omitempty"`
-	BaseYield           uint32                 `protobuf:"varint,9,opt,name=base_yield,json=baseYield,proto3" json:"base_yield,omitempty"`
-	StolenQuantity      uint32                 `protobuf:"varint,10,opt,name=stolen_quantity,json=stolenQuantity,proto3" json:"stolen_quantity,omitempty"`
-	SettledGrowthValue  *GrowthDecimal9        `protobuf:"bytes,11,opt,name=settled_growth_value,json=settledGrowthValue,proto3" json:"settled_growth_value,omitempty"`
-	LastSettledAtMs     int64                  `protobuf:"varint,12,opt,name=last_settled_at_ms,json=lastSettledAtMs,proto3" json:"last_settled_at_ms,omitempty"`
-	EstimatedMatureAtMs *int64                 `protobuf:"varint,13,opt,name=estimated_mature_at_ms,json=estimatedMatureAtMs,proto3,oneof" json:"estimated_mature_at_ms,omitempty"`
-	FertilizerEffect    *TimedEffectRecord     `protobuf:"bytes,14,opt,name=fertilizer_effect,json=fertilizerEffect,proto3,oneof" json:"fertilizer_effect,omitempty"`
-	PestEffect          *TimedEffectRecord     `protobuf:"bytes,15,opt,name=pest_effect,json=pestEffect,proto3,oneof" json:"pest_effect,omitempty"`
-	unknownFields       protoimpl.UnknownFields
-	sizeCache           protoimpl.SizeCache
+	state                  protoimpl.MessageState `protogen:"open.v1"`
+	PlotId                 uint32                 `protobuf:"varint,1,opt,name=plot_id,json=plotId,proto3" json:"plot_id,omitempty"`
+	State                  PlotRecordState        `protobuf:"varint,2,opt,name=state,proto3,enum=classicfarm.data.v1.PlotRecordState" json:"state,omitempty"`
+	CropId                 uint32                 `protobuf:"varint,3,opt,name=crop_id,json=cropId,proto3" json:"crop_id,omitempty"`
+	CropItemId             uint32                 `protobuf:"varint,4,opt,name=crop_item_id,json=cropItemId,proto3" json:"crop_item_id,omitempty"`
+	CropConfigVersion      uint64                 `protobuf:"varint,5,opt,name=crop_config_version,json=cropConfigVersion,proto3" json:"crop_config_version,omitempty"`
+	PlantedAtMs            int64                  `protobuf:"varint,6,opt,name=planted_at_ms,json=plantedAtMs,proto3" json:"planted_at_ms,omitempty"`
+	MaturityValue          *GrowthDecimal9        `protobuf:"bytes,7,opt,name=maturity_value,json=maturityValue,proto3" json:"maturity_value,omitempty"`
+	BaseGrowthRate         *RateDecimal6          `protobuf:"bytes,8,opt,name=base_growth_rate,json=baseGrowthRate,proto3" json:"base_growth_rate,omitempty"`
+	BaseYield              uint32                 `protobuf:"varint,9,opt,name=base_yield,json=baseYield,proto3" json:"base_yield,omitempty"`
+	StolenQuantity         uint32                 `protobuf:"varint,10,opt,name=stolen_quantity,json=stolenQuantity,proto3" json:"stolen_quantity,omitempty"`
+	SettledGrowthValue     *GrowthDecimal9        `protobuf:"bytes,11,opt,name=settled_growth_value,json=settledGrowthValue,proto3" json:"settled_growth_value,omitempty"`
+	LastSettledAtMs        int64                  `protobuf:"varint,12,opt,name=last_settled_at_ms,json=lastSettledAtMs,proto3" json:"last_settled_at_ms,omitempty"`
+	EstimatedMatureAtMs    *int64                 `protobuf:"varint,13,opt,name=estimated_mature_at_ms,json=estimatedMatureAtMs,proto3,oneof" json:"estimated_mature_at_ms,omitempty"`
+	FertilizerEffect       *TimedEffectRecord     `protobuf:"bytes,14,opt,name=fertilizer_effect,json=fertilizerEffect,proto3,oneof" json:"fertilizer_effect,omitempty"`
+	PestEffect             *TimedEffectRecord     `protobuf:"bytes,15,opt,name=pest_effect,json=pestEffect,proto3,oneof" json:"pest_effect,omitempty"`
+	StealQuantity          uint32                 `protobuf:"varint,16,opt,name=steal_quantity,json=stealQuantity,proto3" json:"steal_quantity,omitempty"`
+	MaxStealTimes          uint32                 `protobuf:"varint,17,opt,name=max_steal_times,json=maxStealTimes,proto3" json:"max_steal_times,omitempty"`
+	ProtectedOwnerYield    uint32                 `protobuf:"varint,18,opt,name=protected_owner_yield,json=protectedOwnerYield,proto3" json:"protected_owner_yield,omitempty"`
+	StealCount             uint32                 `protobuf:"varint,19,opt,name=steal_count,json=stealCount,proto3" json:"steal_count,omitempty"`
+	StolenVisitorPlayerIds []uint64               `protobuf:"varint,20,rep,packed,name=stolen_visitor_player_ids,json=stolenVisitorPlayerIds,proto3" json:"stolen_visitor_player_ids,omitempty"`
+	unknownFields          protoimpl.UnknownFields
+	sizeCache              protoimpl.SizeCache
 }
 
 func (x *PlotStateRecord) Reset() {
@@ -842,6 +853,41 @@ func (x *PlotStateRecord) GetFertilizerEffect() *TimedEffectRecord {
 func (x *PlotStateRecord) GetPestEffect() *TimedEffectRecord {
 	if x != nil {
 		return x.PestEffect
+	}
+	return nil
+}
+
+func (x *PlotStateRecord) GetStealQuantity() uint32 {
+	if x != nil {
+		return x.StealQuantity
+	}
+	return 0
+}
+
+func (x *PlotStateRecord) GetMaxStealTimes() uint32 {
+	if x != nil {
+		return x.MaxStealTimes
+	}
+	return 0
+}
+
+func (x *PlotStateRecord) GetProtectedOwnerYield() uint32 {
+	if x != nil {
+		return x.ProtectedOwnerYield
+	}
+	return 0
+}
+
+func (x *PlotStateRecord) GetStealCount() uint32 {
+	if x != nil {
+		return x.StealCount
+	}
+	return 0
+}
+
+func (x *PlotStateRecord) GetStolenVisitorPlayerIds() []uint64 {
+	if x != nil {
+		return x.StolenVisitorPlayerIds
 	}
 	return nil
 }
@@ -2256,7 +2302,7 @@ const file_classicfarm_v1_data_data_model_proto_rawDesc = "" +
 	"\rupdated_at_ms\x18\x0f \x01(\x03R\vupdatedAtMs\"E\n" +
 	"\x0eInventoryStack\x12\x17\n" +
 	"\aitem_id\x18\x01 \x01(\rR\x06itemId\x12\x1a\n" +
-	"\bquantity\x18\x02 \x01(\rR\bquantity\"\xfd\x06\n" +
+	"\bquantity\x18\x02 \x01(\rR\bquantity\"\xdc\b\n" +
 	"\x0fPlotStateRecord\x12\x17\n" +
 	"\aplot_id\x18\x01 \x01(\rR\x06plotId\x12:\n" +
 	"\x05state\x18\x02 \x01(\x0e2$.classicfarm.data.v1.PlotRecordStateR\x05state\x12\x17\n" +
@@ -2276,7 +2322,13 @@ const file_classicfarm_v1_data_data_model_proto_rawDesc = "" +
 	"\x16estimated_mature_at_ms\x18\r \x01(\x03H\x00R\x13estimatedMatureAtMs\x88\x01\x01\x12X\n" +
 	"\x11fertilizer_effect\x18\x0e \x01(\v2&.classicfarm.data.v1.TimedEffectRecordH\x01R\x10fertilizerEffect\x88\x01\x01\x12L\n" +
 	"\vpest_effect\x18\x0f \x01(\v2&.classicfarm.data.v1.TimedEffectRecordH\x02R\n" +
-	"pestEffect\x88\x01\x01B\x19\n" +
+	"pestEffect\x88\x01\x01\x12%\n" +
+	"\x0esteal_quantity\x18\x10 \x01(\rR\rstealQuantity\x12&\n" +
+	"\x0fmax_steal_times\x18\x11 \x01(\rR\rmaxStealTimes\x122\n" +
+	"\x15protected_owner_yield\x18\x12 \x01(\rR\x13protectedOwnerYield\x12\x1f\n" +
+	"\vsteal_count\x18\x13 \x01(\rR\n" +
+	"stealCount\x129\n" +
+	"\x19stolen_visitor_player_ids\x18\x14 \x03(\x04R\x16stolenVisitorPlayerIdsB\x19\n" +
 	"\x17_estimated_mature_at_msB\x14\n" +
 	"\x12_fertilizer_effectB\x0e\n" +
 	"\f_pest_effect\"\x9d\x03\n" +
@@ -2455,7 +2507,7 @@ const file_classicfarm_v1_data_data_model_proto_rawDesc = "" +
 	"!CHAPTER_RECORD_STATUS_UNSPECIFIED\x10\x00\x12\x0f\n" +
 	"\vIN_PROGRESS\x10\x01\x12\r\n" +
 	"\tCLAIMABLE\x10\x02\x12\v\n" +
-	"\aCLAIMED\x10\x03*\x8e\x01\n" +
+	"\aCLAIMED\x10\x03*\xb8\x01\n" +
 	"\n" +
 	"TaskMetric\x12\x1b\n" +
 	"\x17TASK_METRIC_UNSPECIFIED\x10\x00\x12\x12\n" +
@@ -2464,7 +2516,9 @@ const file_classicfarm_v1_data_data_model_proto_rawDesc = "" +
 	"TASK_PLANT\x10\x02\x12\x19\n" +
 	"\x15TASK_APPLY_FERTILIZER\x10\x03\x12\x10\n" +
 	"\fTASK_HARVEST\x10\x04\x12\x12\n" +
-	"\x0eTASK_SELL_CROP\x10\x05*L\n" +
+	"\x0eTASK_SELL_CROP\x10\x05\x12\x13\n" +
+	"\x0fTASK_ADD_FRIEND\x10\x06\x12\x13\n" +
+	"\x0fTASK_STEAL_CROP\x10\a*L\n" +
 	"\x0fOutboxEventType\x12!\n" +
 	"\x1dOUTBOX_EVENT_TYPE_UNSPECIFIED\x10\x00\x12\x16\n" +
 	"\x12CREATE_REWARD_MAIL\x10\x01*_\n" +

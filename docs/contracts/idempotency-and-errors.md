@@ -111,6 +111,30 @@ When safe, `PLOT_STATE_CONFLICT` includes the current `PlotView`, allowing H5 to
 
 A retry of the original successful claim request returns the original successful result, not `CHAPTER_REWARD_ALREADY_CLAIMED`.
 
+### 3.7 Implemented friend extension
+
+| Value | Code | Meaning |
+|---:|---|---|
+| 700 | `FRIEND_CODE_NOT_FOUND` | The code does not exist |
+| 701 | `FRIEND_CODE_EXPIRED` | The code is no longer current or has expired |
+| 702 | `CANNOT_FRIEND_SELF` | Caller attempted to redeem their own code |
+| 703 | `FRIEND_LIMIT_REACHED` | Either player already has 100 active friends |
+| 704 | `NOT_MUTUAL_FRIEND` | Visit or interaction authorization failed |
+| 705 | `VISIT_NOT_FOUND` | The visit ID is unknown |
+| 706 | `VISIT_EXPIRED` | The visit ID has expired |
+| 720 | `PEST_ALREADY_ACTIVE` | Apply requested while a pest is active |
+| 721 | `PEST_NOT_ACTIVE` | Catch requested without an active pest |
+| 722 | `PEST_SOURCE_FORBIDDEN` | The applying Visitor tried to catch that pest |
+| 723 | `STEAL_NOT_AVAILABLE` | The plot cannot currently be stolen from |
+
+For the implemented MySQL friend slice, creating a code is repeat-safe but may
+return the current unexpired code. Redeeming the same code after the
+relationship is active returns success with `newly_created=false`.
+`LIST_FRIENDS` is read-only. FriendSvr does not persist request-result records;
+the unique current-code and unordered-pair keys provide the Slice-1
+idempotency boundary. Owner-Actor pest mutations use the retained-result rules
+below.
+
 ## 4. Which failures close the connection
 
 Close after:
@@ -162,6 +186,15 @@ shop_entry_id, quantity, expected_price_version
 
 SELL_CROP:
 crop_item_id, expected_price_version, amount branch, quantity when present
+
+CATCH_PEST:
+caller_player_id, target_player_id, plot_id
+
+APPLY_PEST_TO_FRIEND:
+action, visitor_player_id, owner_player_id, plot_id, pest_id
+
+CATCH_PEST_FOR_FRIEND:
+action, visitor_player_id, owner_player_id, plot_id
 ```
 
 The fingerprint is not based on client-supplied hash text. Unknown compatible Protobuf fields do not change V1 semantics and are excluded by the V1 fingerprint schema.
@@ -209,6 +242,13 @@ Caching terminal failures prevents a lost failure response from later becoming a
 
 Failures before Actor admission—malformed message, authentication failure, rate rejection, unavailable route—are not stored in the Player Actor.
 
+For friend pest actions, the Visitor Zone validates the current visit and
+mutual friendship before forwarding. Those pre-Owner failures are not retained
+in the Owner Actor. Once admitted, the Owner Actor stores success and terminal
+business failure under `(visitor_player_id, request_id)`, with
+`target_player_id=owner_player_id`. The Owner checkpoint therefore keeps the
+receipt beside the only business state that the command can mutate.
+
 ## 8. Stored result
 
 Each retained write result stores:
@@ -237,6 +277,14 @@ Same ID and same fingerprint:
 - sets envelope `replayed = true`;
 - returns the original `state_version`, receipt, patch and error;
 - does not execute validation, deduct assets, advance tasks, create Outbox or increment `player_seq` again.
+
+For a cross-Zone friend pest action, replay returns the first stored
+`PublicPlotView` or error with `replayed=true`. It does not mutate the Owner
+again and emits no duplicate `PLAYER_STATE_CHANGED` or
+`FRIEND_FARM_CHANGED`. Deterministic failures such as
+`PEST_ALREADY_ACTIVE`, `PEST_NOT_ACTIVE`, and `PEST_SOURCE_FORBIDDEN` are
+retained after Owner-Actor admission and replay unchanged even if the plot
+later changes.
 
 The client displays the receipt but applies its state patch only under normal version rules:
 

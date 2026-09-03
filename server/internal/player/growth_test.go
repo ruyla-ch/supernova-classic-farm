@@ -158,6 +158,10 @@ func TestOnlineSchedulerMaterializesDuePlot(t *testing.T) {
 	})); err != nil {
 		t.Fatal(err)
 	}
+	farmChanges := &recordingFarmChangeForwarder{}
+	if err := runtime.SetFarmChangeForwarder(farmChanges); err != nil {
+		t.Fatal(err)
+	}
 	defer runtime.Close()
 
 	if _, err := runtime.Handle(context.Background(), playerID, LocalOwnerEpoch,
@@ -184,5 +188,75 @@ func TestOnlineSchedulerMaterializesDuePlot(t *testing.T) {
 		pushes[0].GetPlayerStateChangedPush().GetReason() != reasonv1.StateChangeReason_MATURED ||
 		pushes[0].GetPlayerStateChangedPush().GetPatch().GetPlotUpserts()[0].GetPlotState() != plotv1.PlotState_MATURE {
 		t.Fatalf("maturity pushes: %+v", pushes)
+	}
+	farmChanges.mu.Lock()
+	defer farmChanges.mu.Unlock()
+	if len(farmChanges.events) != 1 ||
+		farmChanges.events[0].OwnerPlayerSeq != 3 ||
+		farmChanges.events[0].Reason != reasonv1.StateChangeReason_MATURED ||
+		len(farmChanges.events[0].OwnerPlotUpserts) != 1 ||
+		farmChanges.events[0].OwnerPlotUpserts[0].GetPlotState() != plotv1.PlotState_MATURE ||
+		len(farmChanges.events[0].PublicPlotUpserts) != 1 ||
+		farmChanges.events[0].PublicPlotUpserts[0].GetPlotState() != plotv1.PlotState_MATURE {
+		t.Fatalf("maturity farm changes: %+v", farmChanges.events)
+	}
+}
+
+func TestCommandTriggeredMaturityAndHarvestDeduplicatesFarmPlot(t *testing.T) {
+	const playerID = uint64(42)
+	plantedAt := time.Date(2026, 7, 31, 8, 0, 0, 0, time.UTC)
+	currentTime := plantedAt
+	state := NewDevelopmentState(playerID)
+	state.PlayerSeq = 2
+	state.CheckpointRevision = 3
+	state.Plots[1] = growingPlotAt(plantedAt)
+	runtime, err := NewRuntimeWithLoader(checkpointLoaderFunc(func(context.Context, uint64) (*State, error) {
+		return state, nil
+	}))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer runtime.Close()
+	runtime.now = func() time.Time { return currentTime }
+	var ownerPushes []*wsv1.WsEnvelope
+	if err := runtime.SetPushForwarder(pushForwarderFunc(func(_ context.Context, envelope *wsv1.WsEnvelope) error {
+		ownerPushes = append(ownerPushes, envelope)
+		return nil
+	})); err != nil {
+		t.Fatal(err)
+	}
+	farmChanges := &recordingFarmChangeForwarder{}
+	if err := runtime.SetFarmChangeForwarder(farmChanges); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := runtime.Handle(
+		context.Background(), playerID, LocalOwnerEpoch,
+		snapshotRequest(playerID, "activate-before-maturity"),
+	); err != nil {
+		t.Fatal(err)
+	}
+	currentTime = plantedAt.Add(101 * time.Second)
+	response, err := runtime.Handle(
+		context.Background(), playerID, LocalOwnerEpoch,
+		harvestRequest(playerID, "00112233-4455-6677-8899-aabbccddee88", 1),
+	)
+	if err != nil || response.Error != nil {
+		t.Fatalf("harvest response=%+v err=%v", response, err)
+	}
+	if len(ownerPushes) != 1 ||
+		ownerPushes[0].GetPlayerStateChangedPush() == nil {
+		t.Fatalf("owner maturity pushes=%+v", ownerPushes)
+	}
+	farmChanges.mu.Lock()
+	defer farmChanges.mu.Unlock()
+	if len(farmChanges.events) != 1 ||
+		farmChanges.events[0].OwnerPlayerSeq != 4 ||
+		farmChanges.events[0].Reason != reasonv1.StateChangeReason_HARVEST ||
+		len(farmChanges.events[0].OwnerPlotUpserts) != 1 ||
+		farmChanges.events[0].OwnerPlotUpserts[0].GetPlotId() != 1 ||
+		farmChanges.events[0].OwnerPlotUpserts[0].GetPlotState() != plotv1.PlotState_NEED_CLEANUP ||
+		len(farmChanges.events[0].PublicPlotUpserts) != 1 ||
+		farmChanges.events[0].PublicPlotUpserts[0].GetPlotState() != plotv1.PlotState_NEED_CLEANUP {
+		t.Fatalf("deduplicated farm change=%+v", farmChanges.events)
 	}
 }

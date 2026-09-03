@@ -11,12 +11,14 @@ import (
 	"strings"
 	"time"
 
+	"github.com/Wriosley/supernova-classic-farm/server/internal/coordinatorclient"
 	"github.com/Wriosley/supernova-classic-farm/server/internal/platform/database"
 	"github.com/Wriosley/supernova-classic-farm/server/internal/platform/health"
 	"github.com/Wriosley/supernova-classic-farm/server/internal/platform/logging"
 	"github.com/Wriosley/supernova-classic-farm/server/internal/platform/shutdown"
 	"github.com/Wriosley/supernova-classic-farm/server/internal/player"
 	"github.com/Wriosley/supernova-classic-farm/server/internal/routing"
+	"github.com/Wriosley/supernova-classic-farm/server/internal/visit"
 )
 
 const (
@@ -68,28 +70,42 @@ func main() {
 	gates := &shardExecutionGates{}
 	var authorization ownerAuthorization = localAuthorization{}
 	var lifecycle *lifecycleHandler
+	var table *routing.AuthorizationTable
 	if routingMode == dualRoutingMode {
-		table, tableErr := routing.NewAuthorizationTable(ownerZoneID)
-		if tableErr != nil {
-			log.Fatal(tableErr)
-		}
-		coordinatorURL := environmentOr("COORDINATOR_URL", "http://127.0.0.1:8083")
-		client := &http.Client{Timeout: 5 * time.Second}
-		if err := refreshAuthorization(ctx, table, client, coordinatorURL); err != nil {
-			log.Fatalf("load initial ownership snapshot: %v", err)
+		table, err = routing.NewAuthorizationTable(ownerZoneID)
+		if err != nil {
+			log.Fatal(err)
 		}
 		authorization = table
+	}
+	coordinatorURL := environmentOr("COORDINATOR_URL", "http://127.0.0.1:8083")
+	routeConfig := coordinatorclient.Config{
+		BaseURL: coordinatorURL,
+		Client:  &http.Client{Timeout: 32 * time.Second},
+	}
+	if table != nil {
+		routeConfig.OnSnapshot = table.Replace
+	}
+	routeClient, err := coordinatorclient.New(routeConfig)
+	if err != nil {
+		log.Fatal(err)
+	}
+	if err := routeClient.Start(ctx); err != nil {
+		log.Fatalf("start Coordinator route client: %v", err)
+	}
+	defer routeClient.Close()
+	if table != nil {
 		lifecycle = &lifecycleHandler{
 			runtime: runtime, authorization: table, gates: gates, now: time.Now,
 			refresh: func() error {
 				refreshCtx, refreshCancel := context.WithTimeout(ctx, 3*time.Second)
 				defer refreshCancel()
-				return refreshAuthorization(refreshCtx, table, client, coordinatorURL)
+				return routeClient.ForceResync(refreshCtx)
 			},
 		}
-		go refreshAuthorizationLoop(ctx, table, client, coordinatorURL, logger)
 	}
 
+	visitRegistry := visit.NewRegistry(time.Now)
 	pushEndpoint := os.Getenv("GATE_PUSH_URL")
 	if pushEndpoint == "" {
 		pushEndpoint = "http://127.0.0.1:8081/internal/v1/player-state-changes"
@@ -104,10 +120,48 @@ func main() {
 	if err := runtime.SetPushForwarder(pushForwarder); err != nil {
 		log.Fatal(err)
 	}
+	farmDispatcher := visit.NewFarmChangeDispatcher(
+		visitRegistry, pushForwarder, logger,
+	)
+	if farmDispatcher == nil {
+		log.Fatal("create farm change dispatcher")
+	}
+	if err := runtime.SetFarmChangeForwarder(farmDispatcher); err != nil {
+		log.Fatal(err)
+	}
+	defer func() {
+		drainCtx, drainCancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer drainCancel()
+		farmDispatcher.Close(drainCtx)
+	}()
 
 	mux := http.NewServeMux()
-	mux.Handle("POST /internal/v1/command",
-		newOwnedCommandHandlerWithGates(runtime, authorization, gates, time.Now))
+	commandHandler := newOwnedCommandHandlerWithGates(runtime, authorization, gates, time.Now)
+	visitHTTPClient := &visit.HTTPClients{
+		Client:    &http.Client{Timeout: 5 * time.Second},
+		Routes:    routeClient,
+		FriendURL: environmentOr("FRIEND_URL", "http://127.0.0.1:8085"),
+	}
+	visitService, err := visit.NewService(
+		visitRegistry, visitHTTPClient, visitHTTPClient, runtime, time.Now,
+	)
+	if err != nil {
+		log.Fatal(err)
+	}
+	commandHandler.visit = visitService
+	friendVisitHandler := &friendVisitHTTPHandler{
+		runtime: runtime, registry: visitRegistry,
+		authorization: authorization, gates: gates, now: time.Now,
+	}
+	mux.Handle("POST /internal/v1/command", commandHandler)
+	mux.HandleFunc("POST /internal/v1/players/{player_id}/friend-task-credit",
+		commandHandler.friendTaskCredit)
+	mux.HandleFunc("POST /internal/v1/friend-visits/enter", friendVisitHandler.enter)
+	mux.HandleFunc("POST /internal/v1/friend-visits/heartbeat", friendVisitHandler.heartbeat)
+	mux.HandleFunc("POST /internal/v1/friend-visits/exit", friendVisitHandler.exit)
+	mux.HandleFunc("POST /internal/v1/friend-visits/apply-steal", friendVisitHandler.applySteal)
+	mux.HandleFunc("POST /internal/v1/friend-visits/apply-pest", friendVisitHandler.applyPest)
+	mux.HandleFunc("POST /internal/v1/friend-visits/catch-pest", friendVisitHandler.catchPest)
 	if lifecycle != nil {
 		mux.HandleFunc("POST /internal/v1/shards/{shard_id}/drain", lifecycle.drain)
 		mux.HandleFunc("POST /internal/v1/shards/{shard_id}/drain-complete", lifecycle.completeDrain)
@@ -143,48 +197,6 @@ func main() {
 	)
 	if err := shutdown.Serve(ctx, server, 5*time.Second, logger); err != nil {
 		logger.Error("zone stopped", "error", err)
-	}
-}
-
-func refreshAuthorization(
-	ctx context.Context,
-	table *routing.AuthorizationTable,
-	client *http.Client,
-	coordinatorURL string,
-) error {
-	snapshot, err := routing.FetchSnapshot(ctx, client, coordinatorURL)
-	if err != nil {
-		return err
-	}
-	return table.Replace(snapshot)
-}
-
-func refreshAuthorizationLoop(
-	ctx context.Context,
-	table *routing.AuthorizationTable,
-	client *http.Client,
-	coordinatorURL string,
-	logger interface {
-		Error(string, ...any)
-		Debug(string, ...any)
-	},
-) {
-	ticker := time.NewTicker(5 * time.Second)
-	defer ticker.Stop()
-	for {
-		select {
-		case <-ctx.Done():
-			return
-		case <-ticker.C:
-			refreshCtx, cancel := context.WithTimeout(ctx, 3*time.Second)
-			err := refreshAuthorization(refreshCtx, table, client, coordinatorURL)
-			cancel()
-			if err != nil {
-				logger.Error("ownership snapshot refresh failed", "error", err)
-				continue
-			}
-			logger.Debug("ownership snapshot refreshed")
-		}
 	}
 }
 
