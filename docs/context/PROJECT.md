@@ -1,90 +1,11 @@
----
-status: active
-updated: 2026-07-30
----
+# 项目范围
 
-# Project Context
-
-## Objective
-
-Independently build and demonstrate a classic farm H5 game with a Go backend, then explain its architecture, capacity assumptions, bottlenecks, performance evidence, AI-assisted workflow, and iterative design process.
-
-## Confirmed facts
-
-- Developer: one person.
-- Backend language: Go.
-- H5 experience: beginner.
-- Demonstration environment: local machine.
-- Midterm review: 2026-07-31.
-- First-stage minimum protocol, data-model and runnable-framework milestone: 2026-08-02.
-- Final defense: 2026-08-21; final materials should be frozen by 2026-08-18.
-- Capacity design target: 30 million DAU. This is a design target, not a locally verified capability.
-- The first implementation slice is the farm owner's single-player loop. Friends and multiplayer follow after this loop is correct.
-- Multiplayer scope initially targets at most three simultaneous users in one farm.
-
-## Delivery requirements
-
-- Account registration and login.
-- Planting lifecycle.
-- Shop and warehouse.
-- Friends and share-link onboarding.
-- Multiplayer farm state synchronization.
-- Basic task system.
-- Client and server deliverables.
-- Architecture, capacity estimation, bottleneck analysis, and load-test validation for the target scale.
-- AI Coding Workflow artifacts.
-- Optional value: weak-network experience and smooth updates.
-
-## Current delivery strategy
-
-The only current production-target architecture is the accepted stateful Player Actor Zone V3:
-
-- Player state is held in a Zone's Player Actor and same-player commands execute serially.
-- Successful ordinary game commands update Actor memory first, mark the Actor Dirty, and reply without waiting for MySQL.
-- A Zone flusher asynchronously batches versioned player checkpoints to MySQL.
-- An abnormal Zone exit may lose the latest unflushed ordinary game state; normal shutdown, Actor eviction, and controlled migration must flush Dirty state first.
-- A versioned 4096-logical-shard map, leases, `owner_epoch`, database fencing, and a majority-authorized production Coordinator preserve single-Owner semantics.
-- The production target uses a three-node majority Coordinator. The local prototype uses a compatible single-node implementation and does not claim control-plane high availability.
-- V1 and V2 remain design-history evidence only. In particular, V2's Journal-before-response and Kafka recovery path are not part of the current V3 write path.
-
-The first product slice is:
-
-```text
-register/login
--> enter own farm
--> buy seeds
--> plant
--> fertilize and grow while online/offline
--> harvest
--> store/sell
--> update and claim a chapter task
--> clean the plot
-```
-
-The first-slice business rules are defined by `../architecture/single-player-vertical-loop-business-architecture.md`.
-
-The first-stage completion standard is:
-
-```text
-the H5 client can register/login
--> establish an authenticated Protobuf WebSocket
--> send one game command through GateSvr
--> route it to the correct Player Actor
--> receive a correlated response
-```
-
-Before implementation, this milestone requires frozen minimum contracts for HTTP login and WS tickets, WebSocket commands and errors, client/player views, Player checkpoints, ShardMap, Dirty batches, Outbox and state versions.
-
-## Prototype evidence boundary
-
-The local prototype should exercise the smallest V3 path: WebSocket routing, Actor serialization, in-Actor task progress, Dirty batching, MySQL checkpoint recovery, a single-node Coordinator-compatible control plane, leases, and epoch rejection.
-
-The production target and local prototype are separate claims. The prototype validates mechanisms and measured single-instance baselines; it does not claim to run 30 million DAU locally.
-
-## Knowledge boundary
-
-UC backend, xRPC, Actor, Proxyless, and related `ai-context` documents are reference material. The project adopts ideas only after recording them in the farm's current architecture or decisions. Company implementation details must not be copied into this repository.
-
-## Documentation rule
-
-The repository is the source of truth for project facts and accepted current design. Personal reasoning and learning journals may live in Obsidian, but must link to rather than duplicate current project documents. `docs/decisions/` is a chronological decision-history ledger; the directory as a whole is not a list of simultaneously active decisions.
+- 分支：class-mid，基于 main，作为中期课设简化版本。
+- 用户负责 Go 后端；Vue 提供当前演示，组员未来用 C++/Qt 重做客户端。
+- 单 Go 进程，JSON HTTP 与 JSON WebSocket，MySQL 同步事务存档。
+- 保留注册、登录、种植、施肥、收获、出售、仓库、任务与领奖、清理地块，以及最小邮箱查询和已读功能。
+- 不包含好友、偷菜、邮件附件或删除、多 Zone、Shard、Coordinator、Actor、Protobuf、Kubernetes、3000 万 DAU 目标或压测平台。
+- 用户明确授权从头简化前后端，并删除与该分支无关的源码、部署及历史文档。
+- 运行目标：本地可演示且代码可由负责人解释，不主张生产规模能力。
+- AI 辅助改造如实记录；课程关于 AI 的要求由负责人向教师确认，不作无 AI 开发声明。
+- 单进程与 JSON 是用户选择；简化后的具体业务数值与存档取舍仍需负责人讲解复核，未伪造 accepted ADR。

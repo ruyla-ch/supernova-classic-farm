@@ -1,77 +1,66 @@
-# Supernova Classic Farm
+# Classic Farm · class-mid
 
-经典农场小游戏：个人完成的超新星后台课题。
+中期课设简化分支：**一个 Go 游戏服务器 + Vue 3 + JSON + MySQL**。
+只有 `server/cmd/game` 一个后端入口。
 
-## 当前状态
+## 环境与启动
 
-项目已完成第一阶段认证快照技术链路：H5 注册/登录、一次性 WS Ticket、Gate 路由、单节点 Coordinator-compatible ShardMap、Zone Player Actor 和关联快照响应。
+- Go 1.26.x，Windows amd64；Node.js 24+，npm；MySQL 8.0.46/8.4（实际验证范围见证据）。】
+- PowerShell 脚本被限制时用 `powershell -NoProfile -ExecutionPolicy Bypass -File ...`。
 
-默认启动仍使用开发内存适配器。MySQL 8.4.11 已验证从注册到 `CLEAN_PLOT` 的完整服务端单玩家链路和 `player_seq=8` 重启恢复：29 金币、2 个旧种子、1 个肥料、3 个下一章种子、`EMPTY` 地块和第二章 `IN_PROGRESS`。满仓奖励会原子记录待发送邮件 Outbox，当前没有 Relay、Mail Service 或邮件 UI。H5 已提供商店、地块、仓库和章节任务交互；浏览器实测完成购买到清理的整条内存链路，收到一次成熟 Push，最终到达 `player_seq=8`，320 像素宽度无横向溢出。生产级 Push 重试/跨 Gate 路由、旧 Owner Fence 拒绝和容量验证尚未完成。权威进度与限制见 `docs/context/CURRENT.md`。
-
-Zone 还实现了最小不可变版本化配置快照；`GET_SHOP` 返回当前启用的买入/卖出报价，`BUY_SEEDS` 和 `SELL_CROP` 使用同一固定快照推导权威价格。独立 ConfigSvr 和 H5 商店界面尚未实现。
-
-## 文档入口
-
-- `AGENTS.md`：所有 AI 和开发者共同遵守的工作规则。
-- `docs/README.md`：文档地图、阅读顺序和事实来源规则。
-- `docs/context/PROJECT.md`：稳定的项目目标、边界与事实。
-- `docs/context/CURRENT.md`：当前进度、问题和下一步。
-- `docs/architecture/`：系统总览与跨模块设计。
-- `docs/modules/`：业务模块所有权、能力和不变量。
-- `docs/contracts/`：HTTP、WebSocket、事件、数据和幂等契约。
-- `docs/decisions/`：架构决策记录。
-- `docs/plans/`：开放问题看板和实施计划。
-- `docs/evidence/`：测试、压测和故障实验证据。
-
-## 计划中的目录
-
-- `server/`：Go 后端。
-- `web/`：Vue H5 客户端。
-- `tests/`：跨模块和端到端测试。
-- `loadtest/`：压测脚本与负载模型。
-- `deploy/`：本地部署及后续演进配置。
-
-## 本地启动
-
-启动全部 Go 后端（Login、Gate、Zone、Coordinator）：
+首次下载依赖（项目根目录）：
 
 ```powershell
-.\start-servers.ps1
+powershell -NoProfile -ExecutionPolicy Bypass -File .\dev.ps1 -Action install
 ```
 
-不传 `MYSQL_DSN` 时脚本使用开发内存适配器。按 `Ctrl+C` 会停止全部后端进程。
 
-使用 Docker 时，可启动 MySQL 并应用迁移：
+MySQL 模式：新建数据库 `classicfarm`，给本地应用账号该库的读写和建表权限。
+本机 MySQL 已有该库/账号时，直接复用。将 `.env.example` 复制为 `.env`（已有 `.env` 不要覆盖），在本地填密码。
+启动脚本读取 `.env` 的 MYSQL_* 字段，或使用当前环境中的 MYSQL_DSN：
 
 ```powershell
-Copy-Item .env.example .env
-.\dev.ps1 -Action migrate
+powershell -NoProfile -ExecutionPolicy Bypass -File .\start-servers.ps1
 ```
 
-MySQL 模式下，注册会在一个事务内提交账号、Session 和初始
-`PlayerCheckpointV1`；Zone 首次激活 Actor 时从该 Checkpoint 加载，
-后续 Actor 命令通过异步 Dirty flusher 写回；奖励溢出的 checkpoint
-与 `player_outbox` 行在同一个 MySQL 事务提交。
+服务自动创建三张新表 `class_mid_accounts`、`class_mid_states`、`class_mid_mails`；不修改旧版表，也不需要重建数据库。
+**请在新版本重新注册账号。** 内存模式退出丢失全部数据；MySQL 模式保留账号与农场，服务重启后需要重新登录。
 
-已安装本机 MySQL 并执行迁移后，可运行会安全提示输入应用密码的 E2E：
-
-```powershell
-.\tests\e2e\run-mysql-authenticated-snapshot.ps1
-.\tests\e2e\run-mysql-restart-recovery.ps1
-```
-
-另开一个 PowerShell 启动 H5：
+另开终端运行前端：
 
 ```powershell
 cd web
-npm install
-npm run dev
+npm.cmd run dev
 ```
 
-浏览器访问 `http://localhost:5173`。
+访问 http://localhost:5173。开发代理把 `/api` 和 `/ws` 转发给 8080。
+`npm.cmd run build` 只生成静态文件，不自动提供后端代理；正式部署需另行配置同源反向代理。
 
-运行可自动清理进程的协议端到端验证：
+## 当前玩法
+
+4 块地、胡萝卜一种作物。初始 10 金币、1 份肥料。
+胡萝卜种子 2 金币，肥料 2 金币，胡萝卜卖价 5 金币；种植 100 秒成熟，收获 3 个。
+一份肥料立即缩短 30 秒剩余时间，每株仅一次。仓库总数量上限 200。
+每章完成买 3 种子、种植、施肥、收获、出售五项任务，领取 10 金币和 3 种子，再进入相同目标的下一章。
+新注册玩家会收到一封欢迎邮件；已有账号不补发。邮箱支持查询正文和标记已读。满仓时操作失败，成熟由服务器时间推导，离线仍会生长。
+
+## 代码阅读顺序
+
+1. `server/internal/game/model.go`：数据、消息、配置。
+2. `rules.go`：种植到领奖的业务规则与重复请求处理。
+3. `store.go` / `mysql.go`：内存存储、三张表和 MySQL 行锁事务。
+4. `password.go` / `http.go`：密码派生、账号登录、Session。
+5. `websocket.go`：连接认证及游戏指令。
+6. `server/cmd/game/main.go`：启动配置。
+7. `web/src/game/`、`web/src/App.vue`：JSON 网络层和界面。
+
+## 验证与文档
 
 ```powershell
-powershell -NoProfile -ExecutionPolicy Bypass -File .\tests\e2e\run-authenticated-snapshot.ps1
+powershell -NoProfile -ExecutionPolicy Bypass -File .\dev.ps1 -Action test
 ```
+
+[文档地图](docs/README.md) · [架构说明](docs/architecture.md) · [JSON 协议](docs/contracts/json-api.md) · [Qt 接入](docs/qt-client-guide.md) · [代码 Review](docs/code-review.md) · [测试说明](docs/testing.md) · [中期答辩](docs/midterm-defense.md)
+
+旧分布式实现和历史文档在 main 等原分支中保留，不是本分支运行依赖。
+本分支包含 AI 辅助改造，开发记录见证据文档；课程使用应遵循教师要求并如实说明。
